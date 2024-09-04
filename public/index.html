@@ -1,3 +1,658 @@
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="shortcut icon" href="img/favicon.ico" type="image/x-icon">
+    <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+    <link rel="apple-touch-icon" sizes="72x72" href="img/apple-touch-icon-72x72.png">
+    <link rel="apple-touch-icon" sizes="114x114" href="img/apple-touch-icon-114x114.png">
+
+    <link rel="stylesheet" type="text/css" href="css/bootstrap.css">
+    <link rel="stylesheet" type="text/css" href="fonts/font-awesome/css/font-awesome.css">
+    <link rel="stylesheet" type="text/css" href="css/style.css">
+    <link rel="stylesheet" type="text/css" href="css/nivo-lightbox/nivo-lightbox.css">
+    <link rel="stylesheet" type="text/css" href="css/nivo-lightbox/default.css">
+    <link href="https://fonts.googleapis.com/css?family=Open+Sans:300,400,600,700" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css?family=Lato:400,700" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css?family=Raleway:300,400,500,600,700,800,900" rel="stylesheet">
+    <title>A React Landing Page Template</title>
+    <meta name="description" content="">
+    <meta name="author" content="@Issaafalkattan">
+    <script defer="" src="/static/js/bundle.js"></script>
+    <style>
+        body {
+            background-color: black;
+            /* height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center; */
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+                'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+                sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        /* .tagline{
+            font-size: 30px;
+            color: gray;
+            font-family: Verdana, Geneva, Tahoma, sans-serif;
+        } */
+        h5{
+            font-size: 30px;
+            color: gray;
+            font-family: Verdana, Geneva, Tahoma, sans-serif;
+        }
+        /* .aboutus{
+            font-size: 5rem;
+            font-family: Verdana, Geneva, Tahoma, sans-serif;
+            color: transparent;
+            -webkit-text-stroke: 3px white;
+        }
+        .aboutus::before{
+            position: absolute;
+            width: 0%;
+            height: 100%;
+            content: "ABOUT US";
+            overflow: hidden;
+            color: white;
+            border-right: 8px solid white;
+            transition: 1s ease-in-out ;
+        }
+        .aboutus:hover::before{
+            width: 55%;
+            filter: drop-shadow(0 0 15px white);
+        }
+        .touch{
+            font-size: 5rem;
+            font-family: Verdana, Geneva, Tahoma, sans-serif;
+            color: transparent;
+            -webkit-text-stroke: 3px darkmagenta;
+        }
+        .touch::before{
+            position: absolute;
+            width: 0%;
+            height: 100%;
+            content: "GET IN TOUCH";
+            overflow: hidden;
+            color: darkmagenta;
+            border-right: 8px solid darkmagenta;
+            transition: 1s ease-in-out ;
+        }
+        .touch:hover::before{
+            width: 65%;
+            filter: drop-shadow(0 0 45px darkmagenta);
+        }
+        .ourservices{
+            font-size: 7rem;
+            font-family: Verdana, Geneva, Tahoma, sans-serif;
+            color: transparent;
+            -webkit-text-stroke: 3px darkmagenta;
+        }
+        .ourservices::before{
+            position: absolute;
+            width: 0%;
+            height: 100%;
+            content: "OUR SERVICES";
+            overflow: hidden;
+            color: darkmagenta;
+            border-right: 8px solid darkmagenta;
+            transition: 1s ease-in-out ;
+        }
+        .ourservices:hover::before{
+            width: 70%;
+            filter: drop-shadow(0 0 45px darkmagenta);
+        } */
+        .animation{
+            justify-content: center;
+            align-items: center;
+            font-size: 110px;
+            font-family: Verdana, Geneva, Tahoma, sans-serif;
+            color: transparent;
+            -webkit-text-stroke: 3px darkmagenta;
+            position: relative;
+        }
+        .animation::before{
+            content: "WEBWHIZARD";
+            position: absolute;
+            width: 0%;
+            height: 100%;
+            overflow: hidden;
+            color: darkmagenta;
+            border-right: 8px solid darkmagenta;
+            transition: 1s ease-in-out ;
+        }
+        .animation:hover::before{
+            width: 100%;
+            filter: drop-shadow(0 0 25px darkmagenta);
+        }
+        #menu{
+            background-color: black;
+        }
+        code {
+            font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+                monospace;
+        }
+        /*# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIndlYnBhY2s6Ly8uL3NyYy9pbmRleC5jc3MiXSwibmFtZXMiOltdLCJtYXBwaW5ncyI6IkFBQUE7RUFDRSxTQUFTO0VBQ1Q7O2NBRVk7RUFDWixtQ0FBbUM7RUFDbkMsa0NBQWtDO0FBQ3BDOztBQUVBO0VBQ0U7YUFDVztBQUNiIiwic291cmNlc0NvbnRlbnQiOlsiYm9keSB7XHJcbiAgbWFyZ2luOiAwO1xyXG4gIGZvbnQtZmFtaWx5OiAtYXBwbGUtc3lzdGVtLCBCbGlua01hY1N5c3RlbUZvbnQsICdTZWdvZSBVSScsICdSb2JvdG8nLCAnT3h5Z2VuJyxcclxuICAgICdVYnVudHUnLCAnQ2FudGFyZWxsJywgJ0ZpcmEgU2FucycsICdEcm9pZCBTYW5zJywgJ0hlbHZldGljYSBOZXVlJyxcclxuICAgIHNhbnMtc2VyaWY7XHJcbiAgLXdlYmtpdC1mb250LXNtb290aGluZzogYW50aWFsaWFzZWQ7XHJcbiAgLW1vei1vc3gtZm9udC1zbW9vdGhpbmc6IGdyYXlzY2FsZTtcclxufVxyXG5cclxuY29kZSB7XHJcbiAgZm9udC1mYW1pbHk6IHNvdXJjZS1jb2RlLXBybywgTWVubG8sIE1vbmFjbywgQ29uc29sYXMsICdDb3VyaWVyIE5ldycsXHJcbiAgICBtb25vc3BhY2U7XHJcbn1cclxuIl0sInNvdXJjZVJvb3QiOiIifQ== */
+    </style>
+    <style>
+        @media screen and (max-width: 400px) {
+            #features {
+                padding: 20px;
+                width: 111%;
+            }
+
+            #about,
+            #services,
+            #testimonials,
+            #team,
+            #contact,
+            #footer {
+                width: 111%;
+            }
+
+            #portfolio {
+                width: 110%;
+            }
+        }
+
+        /*# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIndlYnBhY2s6Ly8uL3NyYy9BcHAuY3NzIl0sIm5hbWVzIjpbXSwibWFwcGluZ3MiOiJBQUFBO0VBQ0U7SUFDRSxhQUFhO0lBQ2IsV0FBVztFQUNiO0VBQ0E7Ozs7OztJQU1FLFdBQVc7RUFDYjs7RUFFQTtJQUNFLFdBQVc7RUFDYjtBQUNGIiwic291cmNlc0NvbnRlbnQiOlsiQG1lZGlhIHNjcmVlbiBhbmQgKG1heC13aWR0aDogNDAwcHgpIHtcclxuICAjZmVhdHVyZXMge1xyXG4gICAgcGFkZGluZzogMjBweDtcclxuICAgIHdpZHRoOiAxMTElO1xyXG4gIH1cclxuICAjYWJvdXQsXHJcbiAgI3NlcnZpY2VzLFxyXG4gICN0ZXN0aW1vbmlhbHMsXHJcbiAgI3RlYW0sXHJcbiAgI2NvbnRhY3QsXHJcbiAgI2Zvb3RlciB7XHJcbiAgICB3aWR0aDogMTExJTtcclxuICB9XHJcblxyXG4gICNwb3J0Zm9saW8ge1xyXG4gICAgd2lkdGg6IDExMCU7XHJcbiAgfVxyXG59XHJcbiJdLCJzb3VyY2VSb290IjoiIn0= */
+    </style>
+</head>
+
+<body id="page-top" data-spy="scroll" data-target=".navbar-fixed-top" data-new-gr-c-s-check-loaded="14.1081.0"
+    data-gr-ext-installed="">
+    <div id="root">
+        <div>
+            <nav id="menu" class="navbar navbar-default navbar-fixed-top">
+                <div class="container">
+                    <div class="navbar-header">
+                        <button type="button" class="navbar-toggle collapsed" data-toggle="collapse"
+                            data-target="#bs-example-navbar-collapse-1">
+                            <span class="sr-only">Toggle navigation</span>
+                            <span class="icon-bar"></span>
+                            <span class="icon-bar"></span>
+                            <span class="icon-bar"></span> 
+                        </button>
+                        <img src="webwhizard.jpeg" alt="" srcset="" width="40px" height="40px">
+                        <a class="navbar-brand page-scroll"
+                            href="#page-top">WEBWHIZARD</a>
+                    </div>
+                    <div class="collapse navbar-collapse" id="bs-example-navbar-collapse-1">
+                        <ul class="nav navbar-nav navbar-right">
+                            <li><a href="#features" class="page-scroll">Features</a></li>
+                            <li><a href="#about" class="page-scroll">About</a></li>
+                            <li><a href="#services" class="page-scroll">Services</a></li>
+                            <li><a href="#portfolio" class="page-scroll">Gallery</a></li>
+                            <li><a href="#testimonials" class="page-scroll">Testimonials</a></li>
+                            <li><a href="#team" class="page-scroll">Team</a></li>
+                            <li><a href="#contact" class="page-scroll">Contact</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </nav>
+            <header id="header">
+                <div class="intro">
+                    <div class="overlay">
+                        <div class="container">
+                            <div class="row">
+                                <div class="col-md-8 col-md-offset-2 intro-text">
+                                    <div>
+                                        <span class="animation">WEBWHIZARD</span>
+                                        <h5>YOUR WEBSITE. YOUR WAY.</h5>
+                                        <!-- <p class="tagline">Mastering the art of optimization.</p> -->
+                                         <br><br>
+                                        <a href="#features"
+                                        class="btn btn-custom btn-lg page-scroll">Learn More</a>
+                                    </div>
+                                    <!-- <span id="mainheading">YOUR WEBSITE. YOUR WAY.</span>
+                                    <p>Mastering the art of optimization.</p><a href="#features"
+                                        class="btn btn-custom btn-lg page-scroll">Learn More</a> -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </header>
+            <div id="features" class="text-center">
+                <div class="container">
+                    <div class="col-md-10 col-md-offset-1 section-title">
+                        <h2 class="myfeatures">Features</h2>
+                    </div>
+                    <div class="row">
+                        <div class="col-xs-6 col-md-3"> <i class="fa fa-comments-o"></i>
+                            <h3>SEO Analysis</h3>
+                            <p>A systematic evaluation of a website 
+                                aims to identify areas for improvement to 
+                                improve its ranking in search engine results pages (SERPs).
+                            </p>
+                        </div>
+                        <div class="col-xs-6 col-md-3"> <i class="fa fa-bullhorn"></i>
+                            <h3>Performance Optimization</h3>
+                            <p> Enhancing a website's speed and 
+                                responsiveness enhances user experience, 
+                                leading to increased engagement, lower bounce rates, and higher conversions.</p>
+                        </div>
+                        <div class="col-xs-6 col-md-3"> <i class="fa fa-group"></i>
+                            <h3>Data Collection</h3>
+                            <p>Gathering historical data on follower growth, engagement metrics, and content performance.</p>
+                        </div>
+                        <div class="col-xs-6 col-md-3"> <i class="fa fa-magic"></i>
+                            <h3>Content Generation</h3>
+                            <p>Creating various types of content, such as blog posts, social media captions, and product descriptions.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="about">
+                <div class="container">
+                    <div class="row">
+                        <div class="col-xs-12 col-md-6"> <img src="img/about.jpg" class="img-responsive" alt=""> </div>
+                        <div class="col-xs-12 col-md-6">
+                            <div class="about-text">
+                                <h2 class="aboutus">About Us</h2>
+                                <p>Innovation and technology should make life simple. That's why, here at WEBWHIZARD, we make sure 
+                                    innovation works for you, your business and for your people.
+                                    <br>
+                                    Our reliable services enable you to enjoy your life more. Our technologies improve everyday,
+                                    so you can confidently focus on what really matters.
+                                </p>
+                                <h3>Why Choose Us?</h3>
+                                <div class="list-style">
+                                    <div class="col-lg-6 col-sm-6 col-xs-12">
+                                        <ul>
+                                            <li>Our website analyzer helps businesses improve their search engine rankings.</li>
+                                            <li>Gain valuable insights and make data-driven decisions that your competitors may not have access to.</li>
+                                            <!-- <li>Our platform can scale to meet the needs of businesses of all sizes.r</li> -->
+                                            <li> Businesses can make data-driven decisions to optimize their marketing efforts.</li>
+                                        </ul>
+                                    </div>
+                                    <div class="col-lg-6 col-sm-6 col-xs-12">
+                                        <ul>
+                                            <li>Our follower predictor and content creation tools ensure consistent and engaging content.</li>
+                                            <li>AI-powered Chatbot to deliver personalized recommendations and information based on individual customer data.</li>
+                                            <li> By optimizing your online presence, you can drive more 
+                                            traffic to your website and convert visitors into customers.</li>
+                                            <!-- <li> Lorem ipsum dolor</li> -->
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="services" class="text-center">
+                <div class="container">
+                    <div class="section-title">
+                        <h2 class="ourservices">Our Services</h2>
+                        <p>WEBWHIZARD aims to provide the following services:</p>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-4"> <i class="fa fa-wordpress"></i>
+                            <div class="service-desc">
+                                <h3>Website Optimizer</h3>
+                                <p>A website optimizer that uses advanced analytics and tools to optimize websites for maximum 
+                                    performance, engagement, conversions, and sales, enhancing user experience and search engine 
+                                    rankings.</p>
+                            </div>
+                        </div>
+                        <div class="col-md-4"> <i class="fa fa-cart-arrow-down"></i>
+                            <div class="service-desc">
+                                <h3>Social Media Predictor</h3>
+                                <p>A feature that predicts your social media followers for the upcoming 4 months.</p>
+                            </div>
+                        </div>
+                        <div class="col-md-4"> <i class="fa fa-cloud-download"></i>
+                            <div class="service-desc">
+                                <h3>AI-supported Content Creation Chatbot </h3>
+                                <p>An AI-Supported chatbot to create content for your blogs posts, social media captions, and product descriptions.</p>
+                            </div>
+                        </div>
+                        <!-- <div class="col-md-4"> <i class="fa fa-language"></i>
+                            <div class="service-desc">
+                                <h3>Consectetur adipiscing</h3>
+                                <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec
+                                    ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.</p>
+                            </div>
+                        </div>
+                        <div class="col-md-4"> <i class="fa fa-plane"></i>
+                            <div class="service-desc">
+                                <h3>Lorem ipsum dolor</h3>
+                                <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec
+                                    ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.</p>
+                            </div>
+                        </div>
+                        <div class="col-md-4"> <i class="fa fa-pie-chart"></i>
+                            <div class="service-desc">
+                                <h3>Consectetur adipiscing</h3>
+                                <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec
+                                    ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.</p>
+                            </div>
+                        </div> -->
+                    </div>
+                </div>
+            </div>
+            <div id="portfolio" class="text-center">
+                <div class="container">
+                    <div class="section-title">
+                        <h2>Gallery</h2>
+                        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit duis sed dapibus leonec.</p>
+                    </div>
+                    <div class="row">
+                        <div class="portfolio-items">
+                            <div class="col-sm-6 col-md-4 col-lg-4">
+                                <div class="portfolio-item">
+                                    <div class="hover-bg"> <a href="optimizer.png" title="Project Title"
+                                            data-lightbox-gallery="gallery1">
+                                            <div class="hover-text">
+                                                <h4>Project Title</h4>
+                                            </div><img src="img/portfolio/01-small.jpg" class="img-responsive"
+                                                alt="Project Title">
+                                        </a> </div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-md-4 col-lg-4">
+                                <div class="portfolio-item">
+                                    <div class="hover-bg"> <a href="img/portfolio/02-large.jpg" title="Project Title"
+                                            data-lightbox-gallery="gallery1">
+                                            <div class="hover-text">
+                                                <h4>Project Title</h4>
+                                            </div><img src="img/portfolio/02-small.jpg" class="img-responsive"
+                                                alt="Project Title">
+                                        </a> </div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-md-4 col-lg-4">
+                                <div class="portfolio-item">
+                                    <div class="hover-bg"> <a href="chatbot.jpeg" title="Project Title"
+                                            data-lightbox-gallery="gallery1">
+                                            <div class="hover-text">
+                                                <h4>Project Title</h4>
+                                            </div><img src="img/portfolio/03-small.jpg" class="img-responsive"
+                                                alt="Project Title">
+                                        </a> </div>
+                                </div>
+                            </div>
+                            <!-- <div class="col-sm-6 col-md-4 col-lg-4">
+                                <div class="portfolio-item">
+                                    <div class="hover-bg"> <a href="img/portfolio/04-large.jpg" title="Project Title"
+                                            data-lightbox-gallery="gallery1">
+                                            <div class="hover-text">
+                                                <h4>Project Title</h4>
+                                            </div><img src="img/portfolio/04-small.jpg" class="img-responsive"
+                                                alt="Project Title">
+                                        </a> </div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-md-4 col-lg-4">
+                                <div class="portfolio-item">
+                                    <div class="hover-bg"> <a href="img/portfolio/05-large.jpg" title="Project Title"
+                                            data-lightbox-gallery="gallery1">
+                                            <div class="hover-text">
+                                                <h4>Project Title</h4>
+                                            </div><img src="img/portfolio/05-small.jpg" class="img-responsive"
+                                                alt="Project Title">
+                                        </a> </div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-md-4 col-lg-4">
+                                <div class="portfolio-item">
+                                    <div class="hover-bg"> <a href="img/portfolio/06-large.jpg" title="Project Title"
+                                            data-lightbox-gallery="gallery1">
+                                            <div class="hover-text">
+                                                <h4>Project Title</h4>
+                                            </div><img src="img/portfolio/06-small.jpg" class="img-responsive"
+                                                alt="Project Title">
+                                        </a> </div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-md-4 col-lg-4">
+                                <div class="portfolio-item">
+                                    <div class="hover-bg"> <a href="img/portfolio/07-large.jpg" title="Project Title"
+                                            data-lightbox-gallery="gallery1">
+                                            <div class="hover-text">
+                                                <h4>Project Title</h4>
+                                            </div><img src="img/portfolio/07-small.jpg" class="img-responsive"
+                                                alt="Project Title">
+                                        </a> </div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-md-4 col-lg-4">
+                                <div class="portfolio-item">
+                                    <div class="hover-bg"> <a href="img/portfolio/08-large.jpg" title="Project Title"
+                                            data-lightbox-gallery="gallery1">
+                                            <div class="hover-text">
+                                                <h4>Project Title</h4>
+                                            </div><img src="img/portfolio/08-small.jpg" class="img-responsive"
+                                                alt="Project Title">
+                                        </a> </div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-md-4 col-lg-4">
+                                <div class="portfolio-item">
+                                    <div class="hover-bg"> <a href="img/portfolio/09-large.jpg" title="Project Title"
+                                            data-lightbox-gallery="gallery1">
+                                            <div class="hover-text">
+                                                <h4>Project Title</h4>
+                                            </div><img src="img/portfolio/09-small.jpg" class="img-responsive"
+                                                alt="Project Title">
+                                        </a> </div>
+                                </div>
+                            </div> -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="testimonials">
+                <div class="container">
+                    <div class="section-title text-center">
+                        <h2 class="faq">Frequently Asked Questions (FAQs)</h2>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="testimonial">
+                                <div class="testimonial-image"> 
+                                    <!-- <img src="img/testimonials/01.jpg" alt=""> -->
+                                 </div>
+                                <div class="testimonial-content">
+                                    <p><b>1. How can I use the services?</b>
+                                    </p>
+                                    <p>First, sign up on the platform if you are a new user or login to your account. Then afterwards, you 
+                                        can check your website score by posting your website link.
+                                    </p>
+                                    <!-- <div class="testimonial-meta"> - John Doe </div> -->
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="testimonial">
+                                <div class="testimonial-image">
+                                     <!-- <img src="img/testimonials/02.jpg" alt=""> -->
+                                     </div>
+                                <div class="testimonial-content">
+                                    <p><b>2. Does WEBWHIZARD provide any suggestions for content creation?</b>
+                                    </p>
+                                    <p>Yes. Use the AI-Powered chatbot provided by our platform to ask any question.</p>
+                                    <!-- <div class="testimonial-meta"> - Johnathan Doe </div> -->
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="testimonial">
+                                <div class="testimonial-image"> 
+                                    <!-- <img src="img/testimonials/03.jpg" alt=""> -->
+                                 </div>
+                                <div class="testimonial-content">
+                                    <p><b>3. Is customer service available 24/7?</b>
+                                    </p>
+                                    <p>Having an FAQ section is a great way to present information about your company.
+                                        Uisng the question-and-answer format makes it more relatble for the users. 
+                                    </p>
+                                    <!-- <div class="testimonial-meta"> - John Doe </div> -->
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="testimonial">
+                                <div class="testimonial-image">
+                                     <!-- <img src="img/testimonials/04.jpg" alt=""> -->
+                                     </div>
+                                <div class="testimonial-content">
+                                    <p><b>4. Is your website optimizer compatible with my website platform?</b>
+                                    </p>
+                                    <p>Our optimizer is compatible with most popular website platforms.</p>
+                                    <!-- <div class="testimonial-meta"> - Johnathan Doe </div> -->
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="testimonial">
+                                <div class="testimonial-image">
+                                     <!-- <img src="img/testimonials/05.jpg" alt="">  -->
+                                </div>
+                                <div class="testimonial-content">
+                                    <p><b>5. Do I need technical expertise to use your website optimizer?</b>
+                                    </p>
+                                    <p>No, our optimizer is designed to be user-friendly, even for those without technical experience.</p>
+                                    <!-- <div class="testimonial-meta"> - John Doe </div> -->
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="testimonial">
+                                <div class="testimonial-image"> 
+                                    <!-- <img src="img/testimonials/06.jpg" alt="">  -->
+                                </div>
+                                <div class="testimonial-content">
+                                    <p><b>6. How can your website optimizer help improve my website's conversions?</b>
+                                    </p>
+                                    <p>By optimizing your website for better user experience and search engine rankings, 
+                                        our optimizer can help increase your conversion rates.</p>
+                                    <!-- <div class="testimonial-meta"> - Johnathan Doe </div> -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="team" class="text-center">
+                <div class="container">
+                    <div class="col-md-8 col-md-offset-2 section-title">
+                        <h2>Meet the Team</h2>
+                        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit duis sed dapibus leonec.</p>
+                    </div>
+                    <div id="row">
+                        <div class="col-md-3 col-sm-6 team">
+                            <div class="thumbnail"> <img src="img/team/01.jpg" alt="..." class="team-img">
+                                <div class="caption">
+                                    <h4>John Doe</h4>
+                                    <p>Director</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 team">
+                            <div class="thumbnail"> <img src="img/team/02.jpg" alt="..." class="team-img">
+                                <div class="caption">
+                                    <h4>Mike Doe</h4>
+                                    <p>Senior Designer</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 team">
+                            <div class="thumbnail"> <img src="img/team/03.jpg" alt="..." class="team-img">
+                                <div class="caption">
+                                    <h4>Jane Doe</h4>
+                                    <p>Senior Designer</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 team">
+                            <div class="thumbnail"> <img src="img/team/04.jpg" alt="..." class="team-img">
+                                <div class="caption">
+                                    <h4>Karen Doe</h4>
+                                    <p>Project Manager</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div id="contact">
+                    <div class="container">
+                        <div class="col-md-8">
+                            <div class="row">
+                                <div class="section-title">
+                                    <h2 class="touch">Get In Touch</h2>
+                                    <p>Please fill out the form below to send us an email and we will get back to you as
+                                        soon as possible.</p>
+                                </div>
+                                <form name="sentMessage">
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="form-group"><input type="text" id="name" name="name"
+                                                    class="form-control" placeholder="Name" required="">
+                                                <p class="help-block text-danger"></p>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="form-group"><input type="email" id="email" name="email"
+                                                    class="form-control" placeholder="Email" required="">
+                                                <p class="help-block text-danger"></p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="form-group"><textarea name="message" id="message" class="form-control"
+                                            rows="4" placeholder="Message" required=""></textarea>
+                                        <p class="help-block text-danger"></p>
+                                    </div>
+                                    <div id="success"></div><button type="submit" class="btn btn-custom btn-lg">Send
+                                        Message</button>
+                                </form>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-md-offset-1 contact-info">
+                            <div class="contact-item">
+                                <h3>Contact Info</h3>
+                                <p><span><i class="fa fa-map-marker"></i> Address</span>Nagpur, Maharashtra, India</p>
+                            </div>
+                            <div class="contact-item">
+                                <p><span><i class="fa fa-phone"></i> Phone</span> +1 123 456 1234</p>
+                            </div>
+                            <div class="contact-item">
+                                <p><span><i class="fa fa-envelope-o"></i> Email</span> webwhizard@gmail.com</p>
+                            </div>
+                        </div>
+                        <div class="col-md-12">
+                            <div class="row">
+                                <div class="social">
+                                    <ul>
+                                        <li><a href="fb.com"><i class="fa fa-facebook"></i></a></li>
+                                        <li><a href="twitter.com"><i class="fa fa-twitter"></i></a></li>
+                                        <li><a href="youtube.com"><i class="fa fa-youtube"></i></a></li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="footer">
+                    <div class="container text-center">
+                        <p>© 2023 Issaaf Kattan React Land Page Template. Design by <a
+                                href="http://www.templatewire.com" rel="nofollow">TemplateWire</a></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script type="text/javascript" src="js/jquery.1.11.1.js"></script>
+    <script type="text/javascript" src="js/bootstrap.js"></script>
+
+</body><grammarly-desktop-integration data-grammarly-shadow-root="true"></grammarly-desktop-integration>
+
+<!-- </html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -49,3 +704,4 @@
   <script type="text/javascript" src="js/jquery.1.11.1.js"></script>
   <script type="text/javascript" src="js/bootstrap.js"></script>
 </body>
+ -->
