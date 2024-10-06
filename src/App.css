@@ -15,4 +15,9 @@
   #portfolio {
     width: 110%;
   }
+  #google_translate_element {
+    display: block !important;
+    background-color: yellow;
+  }
+  
 }
