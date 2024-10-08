@@ -1,5 +1,4 @@
 # React JS Landing Page Template
-
 **
 
 # 🛎️🛎️ Good news! New & improved [V2](https://github.com/issaafalkattan/react-landing-page-template-2021) is out  
@@ -32,3 +31,4 @@ If you need the contact form to work, you also need to create an EmailJS account
 <a href="https://www.free-css.com/assets/files/free-css-templates/preview/page234/interact/">Free-CSS.com </a>
 
 ##### Issaaf kattan
+##### Updated 10-08
