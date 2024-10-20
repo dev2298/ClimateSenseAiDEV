@@ -84,7 +84,7 @@ hr {
   font-family: "Raleway", sans-serif;
   font-size: 24px;
   font-weight: 700;
-  color: #333;
+  color: #0a704e;
   text-transform: uppercase;
 }
 #menu.navbar-default .navbar-nav > li > a {
@@ -257,7 +257,7 @@ header .intro-text {
   height: 100px;
   padding: 30px 0;
   border-radius: 50%;
-  background: linear-gradient(to right, #6372ff 0%, #5ca9fb 100%);
+  background: linear-gradient(to right, #28511c 0%, #5cb25d 50%,coral 100%);
   box-shadow: 10px 10px 10px rgba(0, 0, 0, 0.05);
 }
 /* About Section */
@@ -310,7 +310,7 @@ header .intro-text {
 /* Services Section */
 #services {
   padding: 100px 0;
-  background: linear-gradient(to right, #6372ff 0%, #5ca9fb 100%);
+  background: linear-gradient(to right, #28511c 0%, #5cb25d 50%,coral 100%);
   color: #fff;
 }
 #services .service-desc {
@@ -460,7 +460,9 @@ header .intro-text {
 /* Contact Section */
 #contact {
   padding: 100px 0 60px;
-  background: linear-gradient(to right, #6372ff 0%, #5ca9fb 100%);
+  background: linear-gradient(to right, #28511c 0%, #5cb25d 50%,coral 100%);
+
+  /*background: linear-gradient(to right, #6372ff 0%, #5ca9fb 100%);*/
   color: rgba(255, 255, 255, 0.75);
 }
 #contact .section-title {
