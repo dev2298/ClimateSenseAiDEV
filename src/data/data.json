@@ -1,7 +1,7 @@
 {
   "Header": {
-    "title": "We are a Landing Page",
-    "paragraph": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sed commodo nibh ante facilisis bibendum."
+    "title": "We are  ClimateSense.Ai",
+    "paragraph": "Building Ai-Powered Urban PhotoBioReactors"
   },
   "About": {
     "paragraph": "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
@@ -20,17 +20,17 @@
   },
   "Gallery": [
     {
-      "title": "Project Title",
+      "title": "A ProtoType",
       "largeImage": "img/portfolio/01-large.jpg",
       "smallImage": "img/portfolio/01-small.jpg"
     },
     {
-      "title": "Project Title",
+      "title": "Urban-Bus Stop PBR Concept Design",
       "largeImage": "img/portfolio/02-large.jpg",
       "smallImage": "img/portfolio/02-small.jpg"
     },
     {
-      "title": "Project Title",
+      "title": "Urban-Single Unit PBR Concept Design",
       "largeImage": "img/portfolio/03-large.jpg",
       "smallImage": "img/portfolio/03-small.jpg"
     },
@@ -132,53 +132,48 @@
   "Team": [
     {
       "img": "img/team/01.jpg",
-      "name": "John Doe",
-      "job": "Director"
+      "name": "Devansh Srivastava",
+      "job": "Co-Founder & CTO climate.ai.devansh@climateai.info"
     },
     {
       "img": "img/team/02.jpg",
-      "name": "Mike Doe",
-      "job": "Senior Designer"
+      "name": "Prateek Srivastava",
+      "job": "Co-Founder & CEO climate.ai.prateek@climateai.info"
     },
     {
       "img": "img/team/03.jpg",
-      "name": "Jane Doe",
-      "job": "Senior Designer"
-    },
-    {
-      "img": "img/team/04.jpg",
-      "name": "Karen Doe",
-      "job": "Project Manager"
+      "name": "Aashcharya Mishra",
+      "job": "Chief Research Officer - Botanist aashcharya@climateai.info"
     }
+    
   ],
   "Contact": {
-    "address": "4321 California St, San Francisco, CA 12345 ",
-    "phone": "+1 123 456 1234",
-    "email": "info@company.com",
-    "facebook": "fb.com",
+    "address": "93A Basant Vihar,Indiranagar,Lucknow,UP,226015 ",
+    "phone": "+91-8318872578",
+    "email": "research@climateai.info",
+    "facebook": "instagram.com/climatesense.ai",
     "twitter": "twitter.com",
     "youtube": "youtube.com"
   },
   "Features": [
     {
-      "icon": "fa fa-comments-o",
-      "title": "Lorem ipsum",
-      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
-    },
-    {
-      "icon": "fa fa-bullhorn",
-      "title": "Lorem ipsum",
-      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
-    },
-    {
-      "icon": "fa fa-group",
-      "title": "Lorem ipsum",
-      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
+      "icon": "fa fa-tree",
+      "title": "An Alternative To Trees",
+      "text": "A installed PhotoBioReactor from day one absorbs CO2 equivalent to 2 Ten Year Old Grown Trees"
     },
     {
       "icon": "fa fa-magic",
-      "title": "Lorem ipsum",
-      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
+      "title": "Managed using Ai",
+      "text": "All parameters are self managed by PBR's using Ai Algorithms . We envision tree alternative - Artifically Intelligent Trees" },
+    {
+      "icon": "fa fa-leaf",
+      "title": "Enegy Positive Urban Aesthetics",
+      "text": "PBRs are designed so that they are enerygy positive and as well adds to Urban Artistry"
+    },
+    {
+      "icon": "fa fa-money",
+      "title": "Expansive Market Potential for Byproduct Opportunities.",
+      "text": "Potential USD 300 Billion Market Cap for By-Products Produced "
     }
   ]
 }
