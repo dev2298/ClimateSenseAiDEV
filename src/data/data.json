@@ -100,34 +100,33 @@
   "Testimonials": [
     {
       "img": "img/testimonials/01.jpg",
-      "text": "World Energy Outlook provides scenarios that estimate global CO2 emissions could be anywhere from about `32` to `37` billion metric tons in 2030, depending on the trajectory of climate policies and the transition to renewable energy."
-      ",
+      "text": "Estimated global CO2 emissions could be anywhere from about 32 to 37 billion metric tons in 2030.",
       "name": "International Energy Agency"
     },
     {
       "img": "img/testimonials/02.jpg",
-      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
-      "name": "Johnathan Doe"
+      "text": "The world between 2015 and 2020 per year lost every minute approximately 30soccer fields worth of forest",
+      "name": "Food and Agriculture Organization"
     },
     {
       "img": "img/testimonials/03.jpg",
-      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
-      "name": "John Doe"
+      "text": "Urban areas cover will increase by 140% by 2030, compared to about 0.5 million square kilometers currently.",
+      "name": "The National Institute of Urban Affairs"
     },
     {
       "img": "img/testimonials/04.jpg",
-      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
-      "name": "Johnathan Doe"
+      "text": "The report on Global Warming of 1.5°C urges a 45% reduction in global greenhouse gas emissions by 2030",
+      "name": "Intergovernmental Panel on Climate Change (IPCC)"
     },
     {
       "img": "img/testimonials/05.jpg",
-      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
-      "name": "John Doe"
+      "text": "Over 4 million deaths annually are directly linked to outdoor air pollution worldwide.",
+      "name": "World Health Organization"
     },
     {
       "img": "img/testimonials/06.jpg",
-      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
-      "name": "Johnathan Doe"
+      "text": "Algae are ancient life forms, with cyanobacteria (blue-green algae) over 3.5 billion years old, crucially oxygenating Earth's atmosphere.",
+      "name": "Research"
     }
   ],
   "Team": [
