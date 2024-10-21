@@ -100,8 +100,9 @@
   "Testimonials": [
     {
       "img": "img/testimonials/01.jpg",
-      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
-      "name": "John Doe"
+      "text": "World Energy Outlook provides scenarios that estimate global CO2 emissions could be anywhere from about `32` to `37` billion metric tons in 2030, depending on the trajectory of climate policies and the transition to renewable energy."
+      ",
+      "name": "International Energy Agency"
     },
     {
       "img": "img/testimonials/02.jpg",
