@@ -1,145 +1,184 @@
 {
   "Header": {
-    "title": "We are  ClimateSense.Ai",
-    "paragraph": "Building Ai-Powered Urban PhotoBioReactors"
+    "title": "We are a Landing Page",
+    "paragraph": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sed commodo nibh ante facilisis bibendum."
   },
   "About": {
-    "paragraph": "It is estimated that by 2050, half of the Indian population will be living in urban areas, thus expanding cities by 20-30%. This expansion creates a different set of problems like mass deforestation, habitat fragmentation, loss of flora, increased greenhouse gases (majorly CO2 whose percent has increased more than 25% in the past 5 decades) and disrupted annual whether cycle as seen by the 2024 heat wave.ClimateSense.Ai will solve this problem by making Ai-Powered PhotoBioReactors (first in India)as an alternative to trees – one of which captures the same amount of CO2  as two ten year old grown trees would or a 200 square meter lawn would do. We wish to provide nature that chance to thrive within urban setups providing space efficient with better air quality, aesthetic surroundings, and a profitable revenue model as well.",
+    "paragraph": "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
     "Why": [
-      "Reduce India's carbon footprint, improve urban air quality, and ensure a profitable model.",
-      "Make the brand and product a part of daily public life and make it synonymous with climate tech innovations.",
-      "Build a dedicated Ai Platform to serve wider needs in Climate Tech Field",
-      "Become a major player in USD 300 Billion Biomass Food Supplement market"
+      "Lorem ipsum dolor",
+      "Tempor incididunt",
+      "Lorem ipsum dolor",
+      "Incididunt ut labore"
     ],
     "Why2": [
-      
+      "Aliquip ex ea commodo",
+      "Lorem ipsum dolor",
+      "Exercitation ullamco",
+      "Lorem ipsum dolor"
     ]
   },
   "Gallery": [
     {
-      "title": "A ProtoType",
+      "title": "Project Title",
       "largeImage": "img/portfolio/01-large.jpg",
       "smallImage": "img/portfolio/01-small.jpg"
     },
     {
-      "title": "Urban-Bus Stop PBR Concept Design",
+      "title": "Project Title",
       "largeImage": "img/portfolio/02-large.jpg",
       "smallImage": "img/portfolio/02-small.jpg"
     },
     {
-      "title": "Urban-Single Unit PBR Concept Design",
+      "title": "Project Title",
       "largeImage": "img/portfolio/03-large.jpg",
       "smallImage": "img/portfolio/03-small.jpg"
+    },
+    {
+      "title": "Project Title",
+      "largeImage": "img/portfolio/04-large.jpg",
+      "smallImage": "img/portfolio/04-small.jpg"
+    },
+    {
+      "title": "Project Title",
+      "largeImage": "img/portfolio/05-large.jpg",
+      "smallImage": "img/portfolio/05-small.jpg"
+    },
+    {
+      "title": "Project Title",
+      "largeImage": "img/portfolio/06-large.jpg",
+      "smallImage": "img/portfolio/06-small.jpg"
+    },
+    {
+      "title": "Project Title",
+      "largeImage": "img/portfolio/07-large.jpg",
+      "smallImage": "img/portfolio/07-small.jpg"
+    },
+    {
+      "title": "Project Title",
+      "largeImage": "img/portfolio/08-large.jpg",
+      "smallImage": "img/portfolio/08-small.jpg"
+    },
+    {
+      "title": "Project Title",
+      "largeImage": "img/portfolio/09-large.jpg",
+      "smallImage": "img/portfolio/09-small.jpg"
     }
   ],
-  "Product": [
+  "Services": [
     {
       "icon": "fa fa-wordpress",
-      "name": "",
-      "text": ""
+      "name": "Lorem ipsum dolor",
+      "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at."
     },
     {
       "icon": "fa fa-cart-arrow-down",
-      "name": "",
-      "text": ""
+      "name": "Consectetur adipiscing",
+      "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at."
     },
     {
       "icon": "fa fa-cloud-download",
-      "name": "",
-      "text": ""
+      "name": "Lorem ipsum dolor",
+      "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at."
     },
     {
       "icon": "fa fa-language",
-      "name": "",
-      "text": ""
+      "name": "Consectetur adipiscing",
+      "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at."
     },
     {
       "icon": "fa fa-plane",
-      "name": "",
-      "text": ""
+      "name": "Lorem ipsum dolor",
+      "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at."
     },
     {
       "icon": "fa fa-pie-chart",
-      "name": "",
-      "text": ""
+      "name": "Consectetur adipiscing",
+      "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at."
+    }
   ],
-   "Testimonials": [
+  "Testimonials": [
     {
       "img": "img/testimonials/01.jpg",
-      "text": "Estimated global CO2 emissions could be anywhere from about 32 to 37 billion metric tons in 2030.",
-      "name": "International Energy Agency"
+      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
+      "name": "John Doe"
     },
     {
       "img": "img/testimonials/02.jpg",
-      "text": "The world between 2015 and 2020 per year lost every minute approximately 30soccer fields worth of forest",
-      "name": "Food and Agriculture Organization"
+      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
+      "name": "Johnathan Doe"
     },
     {
       "img": "img/testimonials/03.jpg",
-      "text": "Urban areas cover will increase by 140% by 2030, compared to about 0.5 million square kilometers currently.",
-      "name": "The National Institute of Urban Affairs"
+      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
+      "name": "John Doe"
     },
     {
       "img": "img/testimonials/04.jpg",
-      "text": "The report on Global Warming of 1.5°C urges a 45% reduction in global greenhouse gas emissions by 2030",
-      "name": "Intergovernmental Panel on Climate Change (IPCC)"
+      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
+      "name": "Johnathan Doe"
     },
     {
       "img": "img/testimonials/05.jpg",
-      "text": "Over 4 million deaths annually are directly linked to outdoor air pollution worldwide.",
-      "name": "World Health Organization"
+      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
+      "name": "John Doe"
     },
     {
       "img": "img/testimonials/06.jpg",
-      "text": "Algae are ancient life forms, with cyanobacteria (blue-green algae) over 3.5 billion years old, crucially oxygenating Earth's atmosphere.",
-      "name": "Research"
+      "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis sed dapibus leo nec ornare diam sedasd commodo nibh ante facilisis bibendum dolor feugiat at.\"",
+      "name": "Johnathan Doe"
     }
   ],
   "Team": [
     {
       "img": "img/team/01.jpg",
-      "name": "Devansh Srivastava",
-      "job": "Co-Founder & CTO climate.ai.devansh@climateai.info"
+      "name": "John Doe",
+      "job": "Director"
     },
     {
       "img": "img/team/02.jpg",
-      "name": "Prateek Srivastava",
-      "job": "Co-Founder & CEO climate.ai.prateek@climateai.info"
+      "name": "Mike Doe",
+      "job": "Senior Designer"
     },
     {
       "img": "img/team/03.jpg",
-      "name": "Aashcharya Mishra",
-      "job": "Chief Research Officer - Botanist aashcharya@climateai.info"
+      "name": "Jane Doe",
+      "job": "Senior Designer"
+    },
+    {
+      "img": "img/team/04.jpg",
+      "name": "Karen Doe",
+      "job": "Project Manager"
     }
-    
   ],
   "Contact": {
-    "address": "93A Basant Vihar,Indiranagar,Lucknow,UP,226015 ",
-    "phone": "+91-8318872578",
-    "email": "research@climateai.info",
-    "facebook": "https://instagram.com/climatesense.ai/",
+    "address": "4321 California St, San Francisco, CA 12345 ",
+    "phone": "+1 123 456 1234",
+    "email": "info@company.com",
+    "facebook": "fb.com",
     "twitter": "twitter.com",
     "youtube": "youtube.com"
   },
   "Features": [
     {
-      "icon": "fa fa-tree",
-      "title": "An Alternative To Trees",
-      "text": "A installed PhotoBioReactor from day one absorbs CO2 equivalent to 2 Ten Year Old Grown Trees"
+      "icon": "fa fa-comments-o",
+      "title": "Lorem ipsum",
+      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
+    },
+    {
+      "icon": "fa fa-bullhorn",
+      "title": "Lorem ipsum",
+      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
+    },
+    {
+      "icon": "fa fa-group",
+      "title": "Lorem ipsum",
+      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
     },
     {
       "icon": "fa fa-magic",
-      "title": "Managed using Ai",
-      "text": "All parameters are self managed by PBR's using Ai Algorithms . We envision tree alternative - Artifically Intelligent Trees" },
-    {
-      "icon": "fa fa-leaf",
-      "title": "Enegy Positive Urban Aesthetics",
-      "text": "PBRs are designed so that they are enerygy positive and as well adds to Urban Artistry"
-    },
-    {
-      "icon": "fa fa-money",
-      "title": "Circular Economy",
-      "text": "Potential USD 300 Billion Market Cap for By-Products Produced "
+      "title": "Lorem ipsum",
+      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
     }
   ]
 }
