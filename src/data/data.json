@@ -29,7 +29,8 @@
       "title": "Project Title",
       "largeImage": "img/portfolio/03-large.jpg",
       "smallImage": "img/portfolio/03-small.jpg"
-    },
+    }
+    /*
     {
       "title": "Project Title",
       "largeImage": "img/portfolio/04-large.jpg",
@@ -59,7 +60,7 @@
       "title": "Project Title",
       "largeImage": "img/portfolio/09-large.jpg",
       "smallImage": "img/portfolio/09-small.jpg"
-    }
+    }*/
   ],
   "Services": [
     {
