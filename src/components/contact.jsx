@@ -151,7 +151,7 @@ export const Contact = (props) => {
         <div className="container text-center">
           <p>
             &copy; 2024 Developed for climatesense.ai
-            </a>
+            
           </p>
         </div>
       </div>
