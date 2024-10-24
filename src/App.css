@@ -1,4 +1,4 @@
-@media screen and (max-width: 450px) {
+@media screen and (max-width: 440px) {
   #features {
     padding: 20px;
     width: 190%;
@@ -15,4 +15,6 @@
   #portfolio {
     width: 190%;
   }
+  .intro {
+    width:200%;
 }
