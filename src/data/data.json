@@ -128,23 +128,18 @@
   "Team": [
     {
       "img": "img/team/01.jpg",
-      "name": "John Doe",
-      "job": "Director"
+      "name": "Devansh Srivastava",
+      "job": "Co-Founder & CTO climate.ai.devansh@climateai.info"
     },
     {
       "img": "img/team/02.jpg",
-      "name": "Mike Doe",
-      "job": "Senior Designer"
+      "name": "Prateek Srivastava",
+      "job": "Co-Founder & CEO climate.ai.prateek@climateai.info"
     },
     {
       "img": "img/team/03.jpg",
-      "name": "Jane Doe",
-      "job": "Senior Designer"
-    },
-    {
-      "img": "img/team/04.jpg",
-      "name": "Karen Doe",
-      "job": "Project Manager"
+      "name": "Aashcharya Mishra",
+      "job": "Chief Research Officer - Botanist aashcharya@climateai.info"
     }
   ],
   "Contact": {
