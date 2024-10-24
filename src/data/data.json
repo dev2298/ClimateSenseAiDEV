@@ -157,24 +157,24 @@
   },
   "Features": [
     {
-      "icon": "fa fa-comments-o",
-      "title": "Lorem ipsum",
-      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
-    },
-    {
-      "icon": "fa fa-bullhorn",
-      "title": "Lorem ipsum",
-      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
-    },
-    {
-      "icon": "fa fa-group",
-      "title": "Lorem ipsum",
-      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
+      "icon": "fa fa-tree",
+      "title": "An Alternative To Trees",
+      "text": "A installed PhotoBioReactor from day one absorbs CO2 equivalent to 2 Ten-Year Old Grown Trees"
     },
     {
       "icon": "fa fa-magic",
-      "title": "Lorem ipsum",
-      "text": "Lorem ipsum dolor sit amet placerat facilisis felis mi in tempus eleifend pellentesque natoque etiam."
+      "title": "Managed using Ai",
+      "text": "All parameters are self managed by PBR's using Ai Algorithms . We envision tree alternative - Artifically Intelligent Trees"
+    },
+    {
+      "icon": "fa fa-leaf",
+      "title": "Enegy Positive Urban Aesthetics",
+      "text": "PBRs are designed so that they are enerygy positive and as well adds to Urban Artistry"
+    },
+    {
+      "icon": "fa fa-money",
+      "title": "Expansive Market Potential for Byproduct Opportunities.",
+      "text": "Potential USD 300 Billion Market Cap for By-Products Produced"
     }
   ]
 }
