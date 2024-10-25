@@ -21,7 +21,7 @@ export const Contact = (props) => {
     e.preventDefault();
     console.log(name, email, message);
     emailjs
-      .sendForm("service_lysbecg", "template_x33qlom", e.target, "e4TlrXi-Gc55hXcPZ")
+      .sendForm("service_lysbecg", "template_x33qlom", e.target, "duSJI-Sjzs7qPYUnI")
       .then(
         (result) => {
           console.log(result.text);
