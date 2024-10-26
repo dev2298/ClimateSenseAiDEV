@@ -16,17 +16,17 @@
   },
   "Gallery": [
     {
-      "title": "Project Title",
+      "title": "ProtoType",
       "largeImage": "img/portfolio/01-large.jpg",
       "smallImage": "img/portfolio/01-small.jpg"
     },
     {
-      "title": "Project Title",
+      "title": "Urban Bus Stop Concept - PhotoBioReactor",
       "largeImage": "img/portfolio/02-large.jpg",
       "smallImage": "img/portfolio/02-small.jpg"
     },
     {
-      "title": "Project Title",
+      "title": "Standalone Concept - PhotoBioReactor",
       "largeImage": "img/portfolio/03-large.jpg",
       "smallImage": "img/portfolio/03-small.jpg"
     }
