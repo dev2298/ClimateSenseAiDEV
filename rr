@@ -1,0 +1,541 @@
+USE [Main2Masters]
+GO
+/****** Object:  StoredProcedure [dbo].[SyncEntityWithMDM]    Script Date: 3/20/2025 3:48:23 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+/**************************************************************************
+Procedure Name		:	SyncEntityWithMDM
+Objective		:	This procedure is used to sync Sync Entity in NavMain2
+Database		:	Main2Masters
+Author			:	Jitendra Dhakad
+Create Date		:	4th Jan 2022
+Modified Date	 :	11/21/2024
+Modified By		 :	Gaurav Agarwal
+Execution Time		:	
+Input Parameters:
+
+Algorithm and other details:
+
+****************************************************************************/
+ALTER   PROCEDURE [dbo].[SyncEntityWithMDM]
+(		
+	@jEntityDetail			NVARCHAR(MAX) = NULL,
+	@jEntityRelationships		NVARCHAR(MAX) = NULL,
+	@jEntityTransactionalMapping	NVARCHAR(MAX) = NULL,
+	@jEntityAttributes				NVARCHAR(MAX) = NULL
+)
+AS
+BEGIN
+		
+	SET NOCOUNT ON
+	SET XACT_ABORT ON
+
+	BEGIN TRY	
+		
+		DECLARE	@lastModifiedDate	DATETIME	=	GETDATE(),
+			@versionSource		VARCHAR(60)	=	'MDM',
+		    @outputMsg VARCHAR(MAX),
+			@mappingID INTEGER,
+			@transactionalClientID INTEGER,
+			@entityType TINYINT,
+			@entityID INTEGER,
+			@ret				INTEGER
+		DECLARE	@entities TABLE
+		(
+			EntityID			INTEGER,
+			BusinessClientRelationshipID	INTEGER,
+			NCMID			    	INTEGER,
+			EntityReportingName	    	UDTLongName,
+			EntityReportingNameTypeValue  	TINYINT,
+			EntityShortName		    	UDTShortName,
+			EntityMediumName		UDTName,
+			EntityLongName		    	UDTLongName,
+			EntityTypeCode		    	TINYINT,
+			CurrencyID		    	INTEGER,
+			EntityBehaviourType	    	TINYINT,
+			TradingBehaviourType	    	TINYINT,
+			FundTypeValue		    	TINYINT,
+			EntityStartingBehaviourType   	TINYINT,
+			EntityStructureType	    	TINYINT,
+			EntityDomicileType	    	INTEGER,
+			FiscalYearBeginMonthType    	TINYINT,
+			WeekBeginDayType	    	TINYINT,
+			IsDeliverable		    	TINYINT,
+			EntityStartDateInTheMarket    	DATE,
+			EntityEndDateInTheMarket	DATE,
+			StartDate		    	DATE,
+			EndDate			    	DATE,
+			IsActive		    	TINYINT,
+			IsDeleted		    	TINYINT,
+			VersionNumber		    	BINARY(8),
+			ReviewedBy		    	VARCHAR(60),
+			LastModifiedDate	    	DATETIME2,
+			LastModifiedByUser	    	VARCHAR(60),
+			LastModifiedByMachine	    	VARCHAR(60),
+			SLAPriority			TINYINT,
+			IsVAR				TINYINT
+		)
+
+		DECLARE @entityRelationships TABLE
+		(
+			EntityRelationshipID		INTEGER,    
+			EntityRelationshipType		TINYINT,    
+			EntityID			INTEGER,    
+			TargetEntityID			INTEGER,    
+			SourceEntityID			INTEGER,    
+			IsDeleted			TINYINT,    
+			StartDate			DATE,       
+			EndDate				DATE,       
+			VersionNumber			BINARY(8),  
+			LastModifiedDate		DATETIME2,  
+			LastModifiedByUser		VARCHAR(60),
+			LastModifiedByMachine		VARCHAR(60),
+			SourceAccountID			INTEGER,
+			SourceFundID			INTEGER,
+			SourceAccountMappingExists	TINYINT,
+			SourceClientID	INTEGER,
+			TargetClientID	INTEGER
+		)
+
+		DECLARE @entityTransactionalMapping TABLE
+		(
+			MappingID		INTEGER,
+			ApplicationID		INTEGER,
+			EntityID		INTEGER,
+			TransactionalClientID	INTEGER
+		)
+		DECLARE @entityTransactionalMappingForTrader TABLE
+		(
+			MappingID		INTEGER,
+			ApplicationID		INTEGER,
+			EntityID		INTEGER,
+			TransactionalClientID	INTEGER
+		)
+	
+		IF (@jEntityDetail IS NOT NULL AND  LEN(@jEntityDetail) >4)
+		BEGIN
+			   SELECT @jEntityDetail = REPLACE(REPLACE(@jEntityDetail, CHAR(13), ''), CHAR(10), '')
+
+				INSERT INTO @entities(EntityID,BusinessClientRelationshipID,NCMID,EntityReportingName,EntityReportingNameTypeValue,EntityShortName,EntityMediumName,EntityLongName,EntityTypeCode,CurrencyID,
+							EntityBehaviourType,TradingBehaviourType,FundTypeValue,EntityStartingBehaviourType,EntityStructureType,EntityDomicileType,FiscalYearBeginMonthType,WeekBeginDayType,
+							IsDeliverable,EntityStartDateInTheMarket,EntityEndDateInTheMarket,StartDate,EndDate,IsActive,IsDeleted,VersionNumber,ReviewedBy,LastModifiedDate,LastModifiedByUser,LastModifiedByMachine,
+							SLAPriority,IsVAR)
+			SELECT	EntityID,
+				BusinessClientRelationshipID,
+				ISNULL(NCMID,0),
+				EntityReportingName,
+				EntityReportingNameTypeValue,
+				EntityShortName,
+				EntityMediumName,
+				EntityLongName,
+				EntityTypeCode,
+				CurrencyID,
+				EntityBehaviourType,
+				TradingBehaviourType,
+				FundTypeValue,
+				EntityStartingBehaviourType,
+				EntityStructureType,
+				EntityDomicileType,
+				FiscalYearBeginMonthType,
+				WeekBeginDayType,
+				IsDeliverable,
+				EntityStartDateInTheMarket,
+				EntityEndDateInTheMarket,
+				StartDate,
+				EndDate,
+				IsActive,
+				IsDeleted,
+				T.VersionNumber.value('.', 'BINARY(8)'),
+				ReviewedBy,
+				LastModifiedDate,
+				LastModifiedByUser,
+				LastModifiedByMachine,
+				SLAPriority,
+				IsVAR
+				FROM OPENJSON(@jEntityDetail,'$')
+				WITH 
+				(
+					EntityID			INTEGER,
+					BusinessClientRelationshipID	INTEGER,
+					NCMID			    	INTEGER,
+					EntityReportingName	    	NVARCHAR(360),
+					EntityReportingNameTypeValue  	TINYINT,
+					EntityShortName		    	NVARCHAR(60),
+					EntityMediumName		NVARCHAR(120),
+					EntityLongName		    	NVARCHAR(360),
+					EntityTypeCode		    	TINYINT,
+					CurrencyID		    	INTEGER,
+					EntityBehaviourType	    	TINYINT,
+					TradingBehaviourType	    	TINYINT,
+					FundTypeValue		    	TINYINT,
+					EntityStartingBehaviourType   	TINYINT,
+					EntityStructureType	    	TINYINT,
+					EntityDomicileType	    	INTEGER,
+					FiscalYearBeginMonthType    	TINYINT,
+					WeekBeginDayType	    	TINYINT,
+					IsDeliverable		    	TINYINT,
+					EntityStartDateInTheMarket    	DATE,
+					EntityEndDateInTheMarket	DATE,
+					StartDate		    	DATE,
+					EndDate			    	DATE,
+					IsActive		    	TINYINT,
+					IsDeleted		    	TINYINT,
+					VersionNumber		    	XML,
+					ReviewedBy		    	VARCHAR(60),
+					LastModifiedDate	    	DATETIME2,
+					LastModifiedByUser	    	VARCHAR(60),
+					LastModifiedByMachine	    	VARCHAR(60),
+					SLAPriority			TINYINT,
+					IsVAR				TINYINT
+				) AS T
+
+			END
+			
+		IF (@jEntityRelationships IS NOT NULL AND  LEN(@jEntityRelationships) >4)
+		BEGIN
+			SELECT @jEntityRelationships = REPLACE(REPLACE(@jEntityRelationships, CHAR(13), ''), CHAR(10), '')
+			INSERT	@entityRelationships (EntityRelationshipID,EntityRelationshipType,EntityID,TargetEntityID,SourceEntityID,IsDeleted,StartDate,EndDate,VersionNumber,LastModifiedDate,LastModifiedByUser,LastModifiedByMachine)
+			SELECT	EntityRelationshipID,
+				EntityRelationshipType,
+				EntityID,
+				TargetEntityID=T.SourceEntityID,  
+                SourceEntityID=T.TargetEntityID, 
+				IsDeleted,
+				StartDate,
+				EndDate,
+				T.VersionNumber.value('.', 'BINARY(8)'),
+				LastModifiedDate,
+				LastModifiedByUser,
+				LastModifiedByMachine
+				FROM	OPENJSON(@jEntityRelationships,'$')
+				WITH	(
+					EntityRelationshipID	INTEGER,    
+					EntityRelationshipType	TINYINT,    
+					EntityID		INTEGER,    
+					TargetEntityID		INTEGER,    
+					SourceEntityID		INTEGER,    
+					IsDeleted		TINYINT,    
+					StartDate		DATE,       
+					EndDate			DATE,       
+					VersionNumber		XML,  
+					LastModifiedDate	DATETIME2,  
+					LastModifiedByUser	VARCHAR(60),
+					LastModifiedByMachine	VARCHAR(60)
+				) AS T
+			
+			END
+
+		SELECT * FROM @entityRelationships;
+			
+		IF (@jEntityTransactionalMapping IS NOT NULL AND  LEN(@jEntityTransactionalMapping) >4)
+		BEGIN
+		SELECT @jEntityTransactionalMapping = REPLACE(REPLACE(@jEntityTransactionalMapping, CHAR(13), ''), CHAR(10), '')
+
+		INSERT	@entityTransactionalMapping (MappingID, ApplicationID,EntityID,TransactionalClientID)
+			SELECT	MappingID,
+				ApplicationID,
+				EntityID,
+				TransactionalClientID
+			FROM	OPENJSON(@jEntityTransactionalMapping,'$')
+			WITH	(
+					MappingID		INTEGER,
+					ApplicationID		INTEGER,
+					EntityID		INTEGER,
+					TransactionalClientID	INTEGER
+				)
+			WHERE	ApplicationID	=	8
+			
+		END
+			UPDATE	A
+			SET	A.EndDate	=	DATEADD(YYYY,1,A.EndDate)
+			FROM	@entities	A
+			WHERE YEAR(A.EndDate)	=	'9998'
+
+			UPDATE A
+			SET A.SourceClientID = B.client_id
+			FROM @entityRelationships A
+			INNER JOIN 
+			account_master B with(nolock)
+			ON A.SourceEntityID=B.MDMTopicEntityID
+
+			UPDATE A
+			SET A.TargetClientID = B.client_id
+			FROM @entityRelationships A
+			INNER JOIN 
+			account_master B with(nolock)
+			ON A.TargetEntityID=B.MDMTopicEntityID
+
+			IF EXISTS(select TOP 1 1 from @entityRelationships where SourceClientID<>TargetClientID and SourceClientID is not null and TargetClientID is not null)
+			BEGIN
+			SELECT	@outputMsg	=	@outputMsg + 'Source and Target EntityID doesnt have same ClientID.'
+			RAISERROR('Source and Target EntityID doesnt have same ClientID.',16,1)
+			END
+			--raise error if acc reporting name greater than length 60
+			IF EXISTS(select TOP 1 1 from @entities where len(EntityReportingName) > 60)
+			BEGIN
+			RAISERROR('Entity reporting name Should not be greater than length 60',16,1)
+			END
+
+		BEGIN TRAN 
+
+		IF EXISTS (SELECT TOP 1 1 FROM @entities)
+				    BEGIN
+					--Insert new funds into staging from MDM where MDM Enitytype only Fund,Group,FOF and Trader.
+					INSERT INTO mdm.Entities(EntityID,BusinessClientRelationshipID,NCMID,EntityReportingName,EntityReportingNameTypeValue,EntityShortName,EntityMediumName,EntityLongName,EntityTypeCode,CurrencyID,
+									EntityBehaviourType,TradingBehaviourType,FundTypeValue,EntityStartingBehaviourType,EntityStructureType,EntityDomicileType,FiscalYearBeginMonthType,WeekBeginDayType,
+									IsDeliverable,EntityStartDateInTheMarket,EntityEndDateInTheMarket,StartDate,EndDate,IsActive,IsDeleted,VersionNumber,ReviewedBy,LastModifiedDate,LastModifiedByUser,LastModifiedByMachine,
+									SLAPriority,IsVAR,IsMapped)
+					SELECT	A.EntityID,
+						A.BusinessClientRelationshipID,
+						ISNULL(A.NCMID,0),
+						A.EntityReportingName,
+						A.EntityReportingNameTypeValue,
+						A.EntityShortName,
+						A.EntityMediumName,
+						A.EntityLongName,
+						A.EntityTypeCode,
+						A.CurrencyID,
+						A.EntityBehaviourType,
+						A.TradingBehaviourType,
+						A.FundTypeValue,
+						A.EntityStartingBehaviourType,
+						A.EntityStructureType,
+						A.EntityDomicileType,
+						A.FiscalYearBeginMonthType,
+						A.WeekBeginDayType,
+						A.IsDeliverable,
+						A.EntityStartDateInTheMarket,
+						A.EntityEndDateInTheMarket,
+						A.StartDate,
+						A.EndDate,
+						A.IsActive,
+						A.IsDeleted,
+						A.VersionNumber,
+						A.ReviewedBy,
+						A.LastModifiedDate,
+						A.LastModifiedByUser,
+						A.LastModifiedByMachine,
+						A.SLAPriority,
+						A.IsVAR,
+						IsMapped		=	0
+					FROM	@entities			A
+					INNER JOIN (
+							 SELECT	VALUE 
+							 FROM	Main2Masters.dbo.system_information 
+							 WHERE	type = 'ENTITYTYPE' 
+						    ) S
+					ON	A.EntityTypeCode	=	S.value
+					LEFT JOIN
+						mdm.Entities			B
+					ON	A.EntityID		=	B.EntityID
+					LEFT JOIN
+						account_master			C	WITH (NOLOCK)
+					ON	A.EntityID		=	C.MDMTopicEntityID
+					WHERE	B.EntityID		IS	NULL
+					AND	C.acc_id		IS	NULL
+					
+					Select * from mdm.Entities;
+					--Update existing funds in staging
+					UPDATE	A
+					SET	EntityID				=	B.EntityID,
+						BusinessClientRelationshipID		=	B.BusinessClientRelationshipID,
+						NCMID					=	ISNULL(B.NCMID,0),
+						EntityReportingName			=	B.EntityReportingName,
+						EntityReportingNameTypeValue		=	B.EntityReportingNameTypeValue,
+						EntityShortName				=	B.EntityShortName,
+						EntityMediumName			=	B.EntityMediumName,
+						EntityLongName				=	B.EntityLongName,
+						EntityTypeCode				=	B.EntityTypeCode,
+						CurrencyID				=	B.CurrencyID,
+						EntityBehaviourType			=	B.EntityBehaviourType,
+						TradingBehaviourType			=	B.TradingBehaviourType,
+						FundTypeValue				=	B.FundTypeValue,
+						EntityStartingBehaviourType		=	B.EntityStartingBehaviourType,
+						EntityStructureType			=	B.EntityStructureType,
+						EntityDomicileType			=	B.EntityDomicileType,
+						FiscalYearBeginMonthType		=	B.FiscalYearBeginMonthType,
+						WeekBeginDayType			=	B.WeekBeginDayType,
+						IsDeliverable				=	B.IsDeliverable,
+						EntityStartDateInTheMarket		=	B.EntityStartDateInTheMarket,
+						EntityEndDateInTheMarket		=	B.EntityEndDateInTheMarket,
+						StartDate				=	B.StartDate,
+						EndDate					=	B.EndDate,
+						IsActive				=	B.IsActive,
+						IsDeleted				=	B.IsDeleted,
+						VersionNumber				=	B.VersionNumber,
+						ReviewedBy				=	B.ReviewedBy,
+						LastModifiedDate			=	B.LastModifiedDate,
+						LastModifiedByUser			=	B.LastModifiedByUser,
+						LastModifiedByMachine			=	B.LastModifiedByMachine,
+						SLAPriority				=	B.SLAPriority,
+						IsVAR					=	B.IsVAR
+					FROM	mdm.Entities			A
+					INNER JOIN
+						@entities			B
+					ON	A.EntityID			=	 B.EntityID
+					WHERE	ISNULL(A.VersionNumber,0)	<=	 B.VersionNumber
+
+					--Update entity properties in account master
+					UPDATE	A
+					SET	A.acc_name			=	B.EntityReportingName,
+						A.acc_desc			=	LEFT(B.EntityReportingName,60),
+						A.ShortReportingName		=	B.EntityShortName,
+						A.LongReportingName		=	B.EntityLongName,
+						A.reporting_name		=	B.EntityReportingName,
+						A.ReportingNameType		=	B.EntityReportingNameTypeValue,
+						A.MDMVersionNumber		=	B.VersionNumber,
+						A.MDMStartDate			=	B.StartDate,
+						A.MDMEndDate			=	B.EndDate,
+						A.MDMEntityTypeID		=	B.EntityTypeCode,
+						A.MDMTradingBehaviour		=	C.NAME,
+						A.version_source		=	LEFT(@versionSource,30),
+						A.version_date			=	@lastModifiedDate,
+						A.MDMSlaPriority		=	B.SLAPriority
+					FROM	dbo.account_master			A
+					INNER JOIN
+						@entities				B
+					ON	A.MDMTopicEntityID		=	 B.EntityID
+					LEFT JOIN
+						( SELECT  VALUE ,name
+						  FROM	main2Masters.dbo.system_information with (nolock)
+						  WHERE	TYPE	  = 'TRADINGBEHAVIOR' 
+						 ) C
+					ON	B.TradingBehaviourType 	=   C.VALUE
+					WHERE	ISNULL(A.MDMVersionNumber,0)	<=	B.VersionNumber
+				END
+				IF EXISTS (SELECT TOP 1 1 FROM @entityRelationships)
+				BEGIN
+
+					UPDATE	A
+					SET	TargetEntityID  =   B.TargetEntityID,
+						SourceEntityID  =   B.SourceEntityID,
+						StartDate		=	B.StartDate,
+						EndDate			=	B.EndDate,
+						VersionNumber		=	B.VersionNumber,
+						LastModifiedDate	=	B.LastModifiedDate,
+						LastModifiedByUser	=	B.LastModifiedByUser,
+						LastModifiedByMachine	=	B.LastModifiedByMachine
+					FROM	mdm.EntityRelationships		A
+					INNER JOIN
+						@entityRelationships		B
+					ON	A.EntityRelationshipID		=	B.EntityRelationshipID
+					WHERE	B.VersionNumber			>=	 ISNULL(A.VersionNumber,0)
+
+					--Insert new relationships into staging
+					INSERT	mdm.EntityRelationships (EntityRelationshipID,EntityRelationshipType,EntityID,TargetEntityID,SourceEntityID,IsDeleted,StartDate,EndDate,VersionNumber,LastModifiedDate,LastModifiedByUser,LastModifiedByMachine)
+					SELECT	A.EntityRelationshipID,
+						ISNULL(A.EntityRelationshipType,2),
+						A.EntityID,
+						A.TargetEntityID,
+						A.SourceEntityID,
+						A.IsDeleted,
+						A.StartDate,
+						A.EndDate,
+						A.VersionNumber,
+						A.LastModifiedDate,
+						A.LastModifiedByUser,
+						A.LastModifiedByMachine
+					FROM	@entityRelationships		A
+					LEFT JOIN
+						mdm.EntityRelationships		B WITH(NOLOCK)
+					ON	A.EntityRelationshipID		=	B.EntityRelationshipID
+					WHERE	B.EntityRelationshipID		IS	 NULL
+				END
+				SELECT @entityType=MAX(EntityTypeCode) from @entities
+
+				Select * from mdm.EntityRelationships;
+				--	Update Existing broker account - fund relationships
+				EXEC @ret	=	dbo.SetAccountRelationshipsWithMDM @relationShipID = 2,@isRecordSetFlag = 0,@prorataMappingXML = NULL,@main2ClientID = NULL
+
+				IF (@ret != 0) 
+				BEGIN
+					RAISERROR('Error creating account relationship',16,1)
+				END
+				
+				IF EXISTS (SELECT TOP 1 1 FROM @entityTransactionalMapping)
+				BEGIN
+					--Insert new entity transactional client mapping into staging
+					INSERT	mdm.EntityTransactionalMapping(MappingID, ApplicationID,EntityID,TransactionalClientID)
+					SELECT	A.MappingID,
+						A.ApplicationID,
+						A.EntityID,
+						A.TransactionalClientID
+					FROM	@entityTransactionalMapping	A
+					LEFT JOIN
+						mdm.EntityTransactionalMapping	B
+					ON	A.ApplicationID		=	B.ApplicationID
+					AND	A.EntityID		=	B.EntityID
+					WHERE	A.TransactionalClientID IS	NOT NULL
+					AND	B.MappingID		IS	NULL
+					--AND @entityType<>3
+
+
+					--update client id associated with entity in staging
+					UPDATE	A
+					SET	A.TransactionalClientID		=	B.TransactionalClientID
+					FROM	mdm.EntityTransactionalMapping	A
+					INNER JOIN
+						@entityTransactionalMapping	B
+					ON	A.ApplicationID		=	B.ApplicationID
+					AND	A.EntityID		=	B.EntityID
+					WHERE	A.TransactionalClientID <> B.TransactionalClientID
+				END
+				ELSE
+				BEGIN
+					SELECT  @mappingID= MAX(MappingID) FROM MDM.EntityTransactionalMapping
+					IF NOT EXISTS (SELECT TOP 1 1 from MDM.EntityTransactionalMapping ETM INNER JOIN @entities E ON ETM.EntityID = E.EntityID WHERE ETM.ApplicationID=8)
+					INSERT INTO @entityTransactionalMappingForTrader (MappingID,ApplicationID,TransactionalClientID)
+					SELECT DISTINCT
+					@mappingID+1,
+					ETM.ApplicationID,
+					ETM.TransactionalClientID
+					FROM 
+					MDM.EntityTransactionalMapping  ETM
+					INNER JOIN @entityRelationships ER
+					ON ER.TargetEntityID=ETM.EntityID
+					WHERE ApplicationID=8
+
+					Select @entityID=EntityID from @entities
+					Update @entityTransactionalMappingForTrader Set EntityID=@entityID
+
+
+					--Insert new entity transactional client mapping into staging
+					--IF(@entityType=3)
+					--BEGIN
+					IF NOT EXISTS (SELECT TOP 1 1 FROM mdm.EntityTransactionalMapping WHERE EntityID IN (SELECT EntityID FROM  @entityTransactionalMappingForTrader))
+					BEGIN
+					INSERT	mdm.EntityTransactionalMapping(MappingID, ApplicationID,EntityID,TransactionalClientID)
+					SELECT 
+					MappingID,
+					ApplicationID,
+					EntityID,
+					TransactionalClientID
+					FROM @entityTransactionalMappingForTrader 
+					END
+						--update client id associated with entity in staging
+					UPDATE	A
+					SET	A.TransactionalClientID		=	B.TransactionalClientID
+					FROM	mdm.EntityTransactionalMapping	A
+					INNER JOIN
+						@entityTransactionalMappingForTrader	B
+					ON	A.ApplicationID		=	B.ApplicationID
+					AND	A.EntityID		=	B.EntityID
+					WHERE	A.TransactionalClientID <> B.TransactionalClientID
+
+					--END
+			END
+	    COMMIT TRAN
+
+		RETURN 0
+
+	END TRY
+	BEGIN CATCH
+		EXEC RethrowError
+		
+		RETURN -1
+	END CATCH
+		
+END
+
