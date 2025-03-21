@@ -1,0 +1,51 @@
+CREATE PROCEDURE Rollback_AccountMaster_Changes
+    @batchid INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    BEGIN TRANSACTION;
+
+    -- Declare variables to store fetched values
+    DECLARE @acc_id INT, @action VARCHAR(50);
+
+    -- Cursor to process each record from account_master_log
+    DECLARE rollback_cursor CURSOR FOR 
+    SELECT acc_id, action
+    FROM account_master_log
+    WHERE batchid = @batchid;
+
+    OPEN rollback_cursor;
+    FETCH NEXT FROM rollback_cursor INTO @acc_id, @action;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        -- Rollback INSERT: Delete the inserted record from account_master
+        IF @action = 'INSERTED'
+        BEGIN
+            DELETE FROM account_master WHERE acc_id = @acc_id;
+        END
+        -- Rollback UPDATE: Delete from master and re-insert from log
+        ELSE IF @action = 'UPDATED'
+        BEGIN
+            DELETE FROM account_master WHERE acc_id = @acc_id;
+
+            INSERT INTO account_master
+            SELECT * FROM account_master_log 
+            WHERE acc_id = @acc_id AND batchid = @batchid;
+        END
+        -- Rollback DELETE: Restore the deleted record from log
+        ELSE IF @action = 'DELETED'
+        BEGIN
+            INSERT INTO account_master
+            SELECT * FROM account_master_log 
+            WHERE acc_id = @acc_id AND batchid = @batchid;
+        END
+
+        FETCH NEXT FROM rollback_cursor INTO @acc_id, @action;
+    END
+
+    CLOSE rollback_cursor;
+    DEALLOCATE rollback_cursor;
+
+    COMMIT TRANSACTION;
+END;
