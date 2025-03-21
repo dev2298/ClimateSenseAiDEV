@@ -1,0 +1,30 @@
+CREATE PROCEDURE Rollback_AccountMaster_Changes
+    @batchid INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    BEGIN TRANSACTION;
+
+    -- Rollback INSERTED: Delete records that were inserted
+    DELETE am
+    FROM account_master am
+    INNER JOIN account_master_log aml ON am.acc_id = aml.acc_id
+    WHERE aml.batchid = @batchid AND aml.action = 'INSERTED';
+
+    -- Rollback UPDATED: Restore updated records by deleting from account_master and inserting from log
+    DELETE am
+    FROM account_master am
+    INNER JOIN account_master_log aml ON am.acc_id = aml.acc_id
+    WHERE aml.batchid = @batchid AND aml.action = 'UPDATED';
+
+    INSERT INTO account_master
+    SELECT * FROM account_master_log
+    WHERE batchid = @batchid AND action = 'UPDATED';
+
+    -- Rollback DELETED: Restore deleted records from log
+    INSERT INTO account_master
+    SELECT * FROM account_master_log
+    WHERE batchid = @batchid AND action = 'DELETED';
+
+    COMMIT TRANSACTION;
+END;
