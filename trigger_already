@@ -1,0 +1,297 @@
+
+/********************************************************************************************  
+Trigger Name	:	account_master_trig  
+Objective		:	This Trigger is used to perform any operation like audit trail etc. when   
+					modifications etc on account_master table occurs  
+Created By		:   
+Creation Date	:   
+Modified By		:	Suresh Maholiya  
+Modified Date	:	29th June 2023  
+Algorithm :  
+  
+*********************************************************************************************/  
+CREATE   TRIGGER [dbo].[account_master_trig]   
+ON [dbo].[account_master]  
+FOR INSERT,UPDATE, DELETE  
+NOT FOR REPLICATION  
+AS  
+BEGIN  
+  
+	SET XACT_ABORT, NOCOUNT ON;  
+	
+	DECLARE @BatchID UNIQUEIDENTIFIER ;
+	SET @BatchID = CAST(CAST(CONTEXT_INFO() AS VARBINARY(16)) AS UNIQUEIDENTIFIER);
+
+	BEGIN TRY  
+		IF NOT EXISTS(SELECT 1 FROM inserted)   
+		 AND  
+		 NOT EXISTS(SELECT 1 FROM deleted)   
+		BEGIN  
+		 RETURN;  
+		END  
+  
+		DECLARE @ExecStr			varchar(50),   
+				@delCount			INTEGER  = 0,  
+				@insCount			INTEGER  = 0,  
+				@action				CHAR(1),  
+				@dbName				VARCHAR(60),  
+				@dbCount			INTEGER,  
+				@dbLoop				INTEGER,  
+				@sql				NVARCHAR(MAX),  
+				@xml				XML,
+				@fasLockDateCheck	INT	=	0,
+				@clientID			INTEGER,
+				@Qry				VARCHAR(max),
+				 @contextInfo VARBINARY(MAX),
+				@CallingProc VARCHAR(max)
+  
+		CREATE TABLE #fundSignOff  
+		(  
+				ClientID				INTEGER,  
+				BrokerID				INTEGER,  
+				FundID					INTEGER,  
+				FundName				UDTName,  
+				SuggestedSignOffDate	DATE,  
+				LastSignOffDate			DATE,  
+				LastSignGivenBy			VARCHAR(30),  
+				LastSignGivenOn			DATETIME2(2),  
+				LastEndEquityDate		DATETIME2(2),  
+				PendingPNSDate			DATE,  
+				CriticalCheckDate		DATE,  
+				LastAccountingDate		DATE,  
+				IsMappingExists			TINYINT,  
+				Comments				VARCHAR(255),  
+				IsDefault				TINYINT  
+		) 
+		 
+		CREATE TABLE #clientDatabases  
+		(  
+				ID				INTEGER IDENTITY(1,1),  
+				ClientID		INTEGER,  
+				DatabaseName	VARCHAR(60)  
+		)  
+
+		CREATE TABLE #inputbuffer 
+        (
+            EventType nvarchar(30), 
+            Parameters int, 
+            EventInfo varchar(8000)
+        )
+
+		SET @CallingProc = CONVERT(NVARCHAR, CONTEXT_INFO(), 0)
+
+		IF (@CallingProc Like '%UiSaveAccountMaster%')
+		BEGIN
+			RETURN;
+		END
+
+  
+		SELECT @delCount = COUNT(*) FROM DELETED  
+		SELECT @insCount = COUNT(*) FROM INSERTED  
+  
+		--If Count in inserted and deleted is equal then UPDATE Query is executed  
+		IF @delCount = @insCount  
+		BEGIN  
+			IF @insCount = 0  
+				SET @action = ''  
+			ELSE  
+				SET @action = 'U'  
+		END  
+		--Else If count in Deleted table is zero then INSERT quary is executed  
+		ELSE IF @delCount = 0  
+			SET @action = 'I'  
+		--otherwise DELETE query is executed  
+		ELSE  
+			SET @action = 'D'  
+
+
+        --account lock date always >= client lock date
+        IF UPDATE (lock_date)
+        BEGIN
+
+            
+
+            declare @clientLockDate DATETIME
+            declare @accountLockDate DATETIME
+            declare @accIDOfLockDate INT
+            declare @errorMSG VARCHAR(2000)
+
+			SET @ExecStr = 'DBCC INPUTBUFFER(' + STR(@@SPID) + ') WITH NO_INFOMSGS'
+
+			INSERT INTO #inputbuffer 
+			EXEC (@ExecStr)
+
+			SET @Qry = (SELECT EventInfo FROM #inputbuffer)
+        
+            IF @qry NOT LIKE '%BridgeGetNavcisTradesNEW%' 
+            BEGIN
+                IF (EXISTS(SELECT	TOP 1 1 
+                        FROM	inserted	A
+                        INNER JOIN
+                            client_master	B
+                        ON	A.client_id	= B.client_id
+                        AND	ISNULL(A.lock_date,'1/1/1900') < ISNULL(B.lock_date,'1/1/1900')
+                    ))
+                BEGIN
+                    
+                        SET @accountLockDate = (SELECT	TOP 1 A.lock_date 
+                        FROM	inserted	A
+                        INNER JOIN
+                            client_master	B
+                        ON	A.client_id	= B.client_id
+                        AND	ISNULL(A.lock_date,'1/1/1900') < ISNULL(B.lock_date,'1/1/1900'))
+
+                        SET @accIDOfLockDate = (SELECT	TOP 1 A.acc_id 
+                        FROM	inserted	A
+                        INNER JOIN
+                            client_master	B
+                        ON	A.client_id	= B.client_id
+                        AND	ISNULL(A.lock_date,'1/1/1900') < ISNULL(B.lock_date,'1/1/1900'))
+
+                        SET @clientLockDate = (SELECT	TOP 1 B.lock_date 
+                        FROM	inserted	A
+                        INNER JOIN
+                            client_master	B
+                        ON	A.client_id	= B.client_id
+                        AND	ISNULL(A.lock_date,'1/1/1900') < ISNULL(B.lock_date,'1/1/1900'))
+                    
+                    SET @errorMSG = 'Account lock date must be greater then or equal to Client lock date AccID:' + CONVERT(VARCHAR,@accIDOfLockDate) +  ', Account Lock Date:' +  CONVERT(VARCHAR,@accountLockDate) + ', Client Lock Date:' +  CONVERT(VARCHAR,
+@clientLockDate) 
+                    
+                    RAISERROR (@errorMSG , 16, 1)		
+                END
+            END
+        END
+  
+		IF UPDATE (status)  
+		BEGIN  
+			UPDATE am  
+			SET disabled_on_date = GETDATE()  
+			FROM dbo.account_master am  
+			INNER JOIN   
+			 inserted i   
+			ON am.acc_id = i.acc_id  
+			INNER JOIN   
+			 deleted  d   
+			ON i.acc_id = d.acc_id   
+			AND i.status = 'D'   
+			AND d.status = 'E'  
+		END  
+		
+
+		SELECT TOP 1 @clientID = client_id FROM inserted 
+
+		SELECT @xml= CONVERT(xml,( SELECT
+				AccID		=	i.acc_id,
+				LockDate	=	MIN(i.lock_date )
+		FROM	inserted	i
+		GROUP BY acc_id
+		FOR  XML RAW ('dt'), ROOT('ds')));
+
+		EXEC @fasLockDateCheck  =	ValidateFasLockDate @clientID	= @clientID,@xmlAccountLockDate	=@xml	
+
+		IF @fasLockDateCheck	!=	0	
+		BEGIN
+				RAISERROR (50001,16,1,'Account lock can not be less then FAS lock Date')     
+		END
+
+
+		INSERT dbo.account_master_log  
+		(		acc_id,  
+				acc_name,  
+				acc_desc,  
+				ShortReportingName,  
+				LongReportingName,  
+				client_id,  
+				broker_id,  
+				base_curr,  
+				status,  
+				ReportingNameType,  
+				group_account,  
+				lock_date,  
+				handle_futures,  
+				account_type,  
+				error_limit,  
+				reporting_name,  
+				reporting_path,  
+				broker_trade_acceptance_limit,  
+				hold_equity,  
+				disabled_on_date,  
+				real_broker_id,  
+				MDMEntityTypeID,  
+				broker_acc_no,  
+				pns_style,  
+				default_accrual_source,  
+				interest_accrual_check_limit,  
+				dividend_accrual_check_limit,  
+				version_date,  
+				version_source,  
+				log_version_date,  
+				log_version_source,  
+				AccountingEndDate,  
+				MDMTopicEntityID,  
+				MDMTradingBehaviour,  
+				MDMVersionNumber,  
+				MDMStartDate,  
+				MDMEndDate,  
+				MDMSlaPriority,  
+				CreateDate,  
+				EntityFlag,
+                FasLockDate,
+				BatchID  
+		)  
+		SELECT	d.acc_id,  
+				d.acc_name,  
+				d.acc_desc,  
+				d.ShortReportingName,  
+				d.LongReportingName,  
+				d.client_id,  
+				d.broker_id,  
+				d.base_curr,  
+				d.status,  
+				d.ReportingNameType,  
+				d.group_account,  
+				d.lock_date,  
+				d.handle_futures,  
+				d.account_type,  
+				d.error_limit,  
+				d.reporting_name,  
+				d.reporting_path,  
+				d.broker_trade_acceptance_limit,  
+				d.hold_equity,  
+				d.disabled_on_date,  
+				d.real_broker_id,  
+				d.MDMEntityTypeID,  
+				d.broker_acc_no,  
+				d.pns_style,  
+				d.default_accrual_source,  
+				d.interest_accrual_check_limit,  
+				d.dividend_accrual_check_limit,  
+				d.version_date,  
+				d.version_source,  
+				log_version_date = CURRENT_TIMESTAMP,  
+				log_version_source = HOST_NAME(),  
+				d.AccountingEndDate,  
+				d.MDMTopicEntityID,  
+				d.MDMTradingBehaviour,  
+				d.MDMVersionNumber,  
+				d.MDMStartDate,  
+				d.MDMEndDate,  
+				d.MDMSlaPriority,  
+				d.CreateDate,  
+				EntityFlag,
+				d.FasLockDate,
+				@BatchID 
+		FROM deleted  d 
+	END TRY  
+	BEGIN CATCH  
+		IF  XACT_STATE() <> 0   
+		 OR @@TRANCOUNT > 0  
+		BEGIN   
+		 ROLLBACK TRAN;  
+		END  
+	   
+		;THROW;  
+	  
+	END CATCH  
+END 
