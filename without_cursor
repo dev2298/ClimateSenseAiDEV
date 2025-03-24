@@ -1,67 +1,107 @@
-CREATE PROCEDURE Rollback_AccountMaster_Changes
-    @batchid INT
+USE [Main2Masters]
+GO
+
+/****** Object:  StoredProcedure [dbo].[Rollback_AccountMaster_Changes]    Script Date: 3/24/2025 7:23:29 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+/********************************************************************************************  
+SP Name			:	Rollback_AccountMaster_Changes 
+Objective		:	Rollback Master Changes in case of failure
+Created By		:   
+Creation Date	:   Devansh Srivastava
+Modified By		:	
+Modified Date	:	21st March 2025  
+Algorithm :		:   Query Log according to the BATCHID and perform corresponding negative operations on master table
+  
+*********************************************************************************************/  
+CREATE PROCEDURE [dbo].[Rollback_AccountMaster_Changes]
+    @BatchID UNIQUEIDENTIFIER
 AS
 BEGIN
     SET NOCOUNT ON;
     BEGIN TRANSACTION;
 
-    -- Rollback INSERTED: Delete records that were inserted
-    DELETE am
-    FROM account_master am
-    INNER JOIN account_master_log aml 
-        ON am.acc_id = aml.acc_id
-    WHERE aml.batchid = @batchid AND aml.action = 'INSERTED';
+    -- Declare variables to store fetched values
+    DECLARE @acc_id INT, @action VARCHAR(50);
 
-    -- Rollback UPDATED: Update only columns with mismatched values
-    UPDATE am
-    SET 
-        am.acc_name = aml.acc_name WHERE am.acc_name <> aml.acc_name,
-        am.acc_desc = aml.acc_desc WHERE am.acc_desc <> aml.acc_desc,
-        am.ShortReportingName = aml.ShortReportingName WHERE am.ShortReportingName <> aml.ShortReportingName,
-        am.LongReportingName = aml.LongReportingName WHERE am.LongReportingName <> aml.LongReportingName,
-        am.client_id = aml.client_id WHERE am.client_id <> aml.client_id,
-        am.broker_id = aml.broker_id WHERE am.broker_id <> aml.broker_id,
-        am.base_curr = aml.base_curr WHERE am.base_curr <> aml.base_curr,
-        am.status = aml.status WHERE am.status <> aml.status,
-        am.ReportingNameType = aml.ReportingNameType WHERE am.ReportingNameType <> aml.ReportingNameType,
-        am.group_account = aml.group_account WHERE am.group_account <> aml.group_account,
-        am.lock_date = aml.lock_date WHERE am.lock_date <> aml.lock_date,
-        am.handle_futures = aml.handle_futures WHERE am.handle_futures <> aml.handle_futures,
-        am.account_type = aml.account_type WHERE am.account_type <> aml.account_type,
-        am.error_limit = aml.error_limit WHERE am.error_limit <> aml.error_limit,
-        am.reporting_name = aml.reporting_name WHERE am.reporting_name <> aml.reporting_name,
-        am.reporting_path = aml.reporting_path WHERE am.reporting_path <> aml.reporting_path,
-        am.broker_trade_acceptance_limit = aml.broker_trade_acceptance_limit WHERE am.broker_trade_acceptance_limit <> aml.broker_trade_acceptance_limit,
-        am.hold_equity = aml.hold_equity WHERE am.hold_equity <> aml.hold_equity,
-        am.disabled_on_date = aml.disabled_on_date WHERE am.disabled_on_date <> aml.disabled_on_date,
-        am.real_broker_id = aml.real_broker_id WHERE am.real_broker_id <> aml.real_broker_id,
-        am.MDMEntityTypeID = aml.MDMEntityTypeID WHERE am.MDMEntityTypeID <> aml.MDMEntityTypeID,
-        am.broker_acc_no = aml.broker_acc_no WHERE am.broker_acc_no <> aml.broker_acc_no,
-        am.pns_style = aml.pns_style WHERE am.pns_style <> aml.pns_style,
-        am.default_accrual_source = aml.default_accrual_source WHERE am.default_accrual_source <> aml.default_accrual_source,
-        am.interest_accrual_check_limit = aml.interest_accrual_check_limit WHERE am.interest_accrual_check_limit <> aml.interest_accrual_check_limit,
-        am.dividend_accrual_check_limit = aml.dividend_accrual_check_limit WHERE am.dividend_accrual_check_limit <> aml.dividend_accrual_check_limit,
-        am.version_date = aml.version_date WHERE am.version_date <> aml.version_date,
-        am.version_source = aml.version_source WHERE am.version_source <> aml.version_source,
-        am.AccountingEndDate = aml.AccountingEndDate WHERE am.AccountingEndDate <> aml.AccountingEndDate,
-        am.MDMTopicEntityID = aml.MDMTopicEntityID WHERE am.MDMTopicEntityID <> aml.MDMTopicEntityID,
-        am.MDMTradingBehaviour = aml.MDMTradingBehaviour WHERE am.MDMTradingBehaviour <> aml.MDMTradingBehaviour,
-        am.MDMVersionNumber = aml.MDMVersionNumber WHERE am.MDMVersionNumber <> aml.MDMVersionNumber,
-        am.MDMStartDate = aml.MDMStartDate WHERE am.MDMStartDate <> aml.MDMStartDate,
-        am.MDMEndDate = aml.MDMEndDate WHERE am.MDMEndDate <> aml.MDMEndDate,
-        am.MDMSlaPriority = aml.MDMSlaPriority WHERE am.MDMSlaPriority <> aml.MDMSlaPriority,
-        am.CreateDate = aml.CreateDate WHERE am.CreateDate <> aml.CreateDate,
-        am.EntityFlag = aml.EntityFlag WHERE am.EntityFlag <> aml.EntityFlag,
-        am.FasLockDate = aml.FasLockDate WHERE am.FasLockDate <> aml.FasLockDate
-    FROM account_master am
-    INNER JOIN account_master_log aml 
-        ON am.acc_id = aml.acc_id
-    WHERE aml.batchid = @batchid AND aml.action = 'UPDATED';
+    -- Cursor to process each record from account_master_log
+    DECLARE rollback_cursor CURSOR FOR 
+    SELECT acc_id, action
+    FROM account_master_log
+    WHERE BatchID = @BatchID;
+	
+    OPEN rollback_cursor;
+    FETCH NEXT FROM rollback_cursor INTO @acc_id, @action;
 
-    -- Rollback DELETED: Restore deleted records from log
-    INSERT INTO account_master
-    SELECT * FROM account_master_log
-    WHERE batchid = @batchid AND action = 'DELETED';
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        -- Rollback INSERT: Delete the inserted record from account_master
+		Select @action ;
+        IF @action = 'I'
+        BEGIN
+            DELETE FROM account_master WHERE acc_id = @acc_id;
+        END
+        -- Rollback UPDATE: Delete from master and re-insert from log
+        ELSE IF @action = 'U'
+        BEGIN
+			DELETE FROM dbo.ProcessExecutionLog 
+			WHERE AccountID = @acc_id;
+            DELETE FROM account_master WHERE acc_id = @acc_id;
+
+            INSERT INTO account_master (
+			acc_id,acc_name,acc_desc,ShortReportingName,LongReportingName,client_id,broker_id,base_curr,status,
+			ReportingNameType,group_account,lock_date,handle_futures,account_type,error_limit,reporting_name,
+			reporting_path,broker_trade_acceptance_limit,hold_equity,disabled_on_date,
+			real_broker_id,MDMEntityTypeID,broker_acc_no,
+			pns_style,default_accrual_source,interest_accrual_check_limit,
+			dividend_accrual_check_limit,FundStartDate,AccountingEndDate,MDMTopicEntityID,MDMTradingBehaviour,
+			MDMVersionNumber,MDMStartDate,MDMEndDate,version_date,version_source,MDMSlaPriority,
+			CreateDate,EntityFlag,FasLockDate,BatchID )
+            SELECT 
+			acc_id,acc_name,acc_desc,ShortReportingName,LongReportingName,client_id,broker_id,base_curr,status,
+			ReportingNameType,group_account,lock_date,handle_futures,account_type,error_limit,reporting_name,
+			reporting_path,broker_trade_acceptance_limit,hold_equity,disabled_on_date,
+			real_broker_id,MDMEntityTypeID,broker_acc_no,
+			pns_style,default_accrual_source,interest_accrual_check_limit,
+			dividend_accrual_check_limit,NULL,AccountingEndDate,MDMTopicEntityID,MDMTradingBehaviour,
+			MDMVersionNumber,MDMStartDate,MDMEndDate,version_date,version_source,MDMSlaPriority,
+			CreateDate,EntityFlag,FasLockDate,BatchID FROM account_master_log 
+            WHERE acc_id = @acc_id AND BatchID = @BatchID;
+        END
+        -- Rollback DELETE: Restore the deleted record from log
+        ELSE IF @action = 'D'
+        BEGIN
+            INSERT INTO account_master (
+			acc_id,acc_name,acc_desc,ShortReportingName,LongReportingName,client_id,broker_id,base_curr,status,
+			ReportingNameType,group_account,lock_date,handle_futures,account_type,error_limit,reporting_name,
+			reporting_path,broker_trade_acceptance_limit,hold_equity,disabled_on_date,
+			real_broker_id,MDMEntityTypeID,broker_acc_no,
+			pns_style,default_accrual_source,interest_accrual_check_limit,
+			dividend_accrual_check_limit,FundStartDate,AccountingEndDate,MDMTopicEntityID,MDMTradingBehaviour,
+			MDMVersionNumber,MDMStartDate,MDMEndDate,version_date,version_source,MDMSlaPriority,
+			CreateDate,EntityFlag,FasLockDate,BatchID )
+            SELECT 
+			acc_id,acc_name,acc_desc,ShortReportingName,LongReportingName,client_id,broker_id,base_curr,status,
+			ReportingNameType,group_account,lock_date,handle_futures,account_type,error_limit,reporting_name,
+			reporting_path,broker_trade_acceptance_limit,hold_equity,disabled_on_date,
+			real_broker_id,MDMEntityTypeID,broker_acc_no,
+			pns_style,default_accrual_source,interest_accrual_check_limit,
+			dividend_accrual_check_limit,NULL,AccountingEndDate,MDMTopicEntityID,MDMTradingBehaviour,
+			MDMVersionNumber,MDMStartDate,MDMEndDate,version_date,version_source,MDMSlaPriority,
+			CreateDate,EntityFlag,FasLockDate,BatchID FROM account_master_log 
+            WHERE acc_id = @acc_id AND BatchID = @BatchID;
+        END
+
+        FETCH NEXT FROM rollback_cursor INTO @acc_id, @action;
+    END
+
+    CLOSE rollback_cursor;
+    DEALLOCATE rollback_cursor;
 
     COMMIT TRANSACTION;
 END;
+GO
