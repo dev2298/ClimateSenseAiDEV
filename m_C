@@ -1,0 +1,57 @@
+        public int ProcessEntity(bool isStaging, ProcessEntity objSaveEntity)
+        {
+            int isRelationshipModified = 0;
+            try
+            {
+                param = new Dictionary<string, object>();
+                Database db = CommonDAL.CreateCommonDatabase();
+                IDbConnection connection = new SqlConnection(db.ConnectionString);
+
+                param.Add("Procedure: ", "ProcessEntity");
+                param.Add("isStaging", isStaging);
+                param.Add("entityType", objSaveEntity.EntityType);
+                param.Add("jEntityDetail", objSaveEntity.EntityDetail);
+                param.Add("jEntityAttributes", objSaveEntity.EntityAttributes);
+                param.Add("jEntityRelationships", objSaveEntity.EntityRelationshipsDetail);
+                param.Add("jEntityTransactionalMapping", objSaveEntity.EntityTransactionalMapping);
+                param.Add("jRelationshipsConstraints", objSaveEntity.RelationshipConstraint);
+                param.Add("ConnectionString", db.ConnectionString);
+
+                publishLogger.Info.Write("EntityDAL.ProcessEntity START: ", param);
+                sqlLogger.Info.Write("Proc: ProcessEntity START:", param);
+
+                var parameters = new DynamicParameters();
+                parameters.Add("@isStaging", isStaging, DbType.Boolean);
+                parameters.Add("@entityType", objSaveEntity.EntityType, DbType.Int32);
+                parameters.Add("@jEntityDetail", !string.IsNullOrEmpty(objSaveEntity.EntityDetail) ? objSaveEntity.EntityDetail : null);
+                parameters.Add("@jEntityAttributes", !string.IsNullOrEmpty(objSaveEntity.EntityAttributes) ? objSaveEntity.EntityAttributes : null);
+                parameters.Add("@jEntityRelationships", !string.IsNullOrEmpty(objSaveEntity.EntityRelationshipsDetail) ? objSaveEntity.EntityRelationshipsDetail : null);
+                parameters.Add("@jEntityTransactionalMapping", !string.IsNullOrEmpty(objSaveEntity.EntityTransactionalMapping) ? objSaveEntity.EntityTransactionalMapping : null);
+                parameters.Add("@jRelationshipsConstraints", !string.IsNullOrEmpty(objSaveEntity.RelationshipConstraint) ? objSaveEntity.RelationshipConstraint : null);
+                parameters.Add("@retunValue", dbType: DbType.Int32, direction: ParameterDirection.ReturnValue);
+                parameters.Add("@isRelationshipModified", dbType: DbType.Int16, direction: ParameterDirection.Output);
+
+                using (var multipleResult = connection.QueryMultiple("ProcessEntity", parameters, commandType: CommandType.StoredProcedure))
+                {
+                    int returnResult = Convert.ToInt32(parameters.Get<int>("@retunValue"));
+                    isRelationshipModified = Convert.ToInt16(parameters.Get<Int16>("@isRelationshipModified"));
+                    if (returnResult != 0)
+                    {
+                        publishLogger.Info.Write("There was some error in ProcessEntity. ReturnValue: " + returnResult, param);
+                        sqlLogger.Info.Write("Proc: ProcessEntity: There was some error in ProcessEntity. ReturnValue: " + returnResult, param);
+                    }
+                }
+            }
+            catch (SqlException ex)
+            {
+                publishLogger.Critical("Problem in EntityDAL.ProcessEntity: ", param, ex);
+                param.Add("Exception", ex.Message);
+                throw;
+            }
+            finally
+            {
+                publishLogger.Info.Write("EntityDAL.ProcessEntity END: ", param);
+                sqlLogger.Info.Write("Proc: ProcessEntity END: ", param);
+            }
+            return isRelationshipModified;
+        }
