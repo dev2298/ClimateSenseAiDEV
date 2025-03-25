@@ -1,38 +1,6 @@
-while (!success && retryCount < 2)
-                {
-                    try
-                    {
-                        // Call DAL method to save entity data
-                        EntityDAL.ProcessEntity(objSaveEntity, BatchID, clientId);
-                        success = true; // Mark success if no exception occurs
-                    }
-                    catch (Exception ex)
-                    {
-                        retryCount++;
-                        if (retryCount == 2)
-                        {
-                            logger.Critical($"Retry Failed. Rolling back transaction for ClientID: {clientId}", ex);
-                            EntityDAL.RollbackTransaction(BatchID, clientId); // Call rollback procedure
-                        }
-                        else
-                        {
-                            logger.Warning($"Retry {retryCount}: Error in saving entity for ClientID: {clientId}. Retrying...", ex);
-                        }
-                    }
-                }
-
-                _klogger.LogTraceMessage(clientId, primaryOperationId, Guid.NewGuid(), 0, new DateTime(1900, 1, 1), "After Save: Client EntityMessage", serializedCustomDetails, startDateTime, DateTime.UtcNow, APPLICATIONNAME, Environment.CurrentDirectory, logger);
-            }
-            catch (Exception ex)
-            {
-                logger.Critical($"Problem in Client Entity Message for ClientID {clientId}", ex);
-                _klogger.LogErrorMessage(clientId, ex.ToString(), "Client Entity Processing Failed", primaryOperationId, Guid.NewGuid(), new DateTime(1900, 1, 1), 1, 0, APPLICATIONNAME, Environment.CurrentDirectory, logger);
-                throw;
-            }
-        });
-    }
-    else
-    {
-        throw new Exception($"No clients found for BusinessClientRelationshipIDs: {businessClientRelationshipIds}");
-    }
-}
+ExecuteWithRetry(
+                    () => EntityDAL.ProcessEntity(objSaveEntity, BatchID, clientId), // Main action
+                    () => EntityDAL.RollbackTransaction(BatchID, clientId),         // Rollback action
+                    BatchID, 
+                    clientId
+                );
