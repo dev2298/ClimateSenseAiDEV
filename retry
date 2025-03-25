@@ -1,0 +1,27 @@
+private void ExecuteWithRetry(Action action, Action rollbackAction, Guid BatchID, int clientId, int maxRetries = 2)
+{
+    bool success = false;
+    int retryCount = 0;
+
+    while (!success && retryCount < maxRetries)
+    {
+        try
+        {
+            action.Invoke(); // Execute the provided action
+            success = true;  // Mark success if no exception occurs
+        }
+        catch (Exception ex)
+        {
+            retryCount++;
+            if (retryCount == maxRetries)
+            {
+                logger.Critical($"Retry Failed. Rolling back transaction for ClientID: {clientId}", ex);
+                rollbackAction.Invoke(); // Call rollback method
+            }
+            else
+            {
+                logger.Warning($"Retry {retryCount}: Error in operation for ClientID: {clientId}. Retrying...", ex);
+            }
+        }
+    }
+}
