@@ -1,0 +1,24 @@
+public static void RollbackTransaction(Guid BatchID, int clientId = 0)
+{
+    try
+    {
+        logger.Info.Write($"START: EntityDAL.RollbackTransaction for BatchID={BatchID}, ClientID={clientId}");
+
+        using (SqlConnection con = new SqlConnection(clientId == 0 ? CommonDAL.GetMasterConnectionString() : CommonDAL.GetClientConnectionString(clientId)))
+        {
+            con.Open();
+
+            SqlCommand cmd = new SqlCommand("RollbackTransactionSP", con); // Ensure the SP name is correct
+            cmd.CommandType = CommandType.StoredProcedure;
+            cmd.Parameters.Add("@BatchID", SqlDbType.UniqueIdentifier).Value = BatchID;
+            cmd.ExecuteNonQuery();
+        }
+
+        logger.Info.Write($"END: EntityDAL.RollbackTransaction for BatchID={BatchID}, ClientID={clientId}");
+    }
+    catch (Exception ex)
+    {
+        logger.Critical($"Error in EntityDAL.RollbackTransaction for BatchID={BatchID}, ClientID={clientId}", ex);
+        throw;
+    }
+}
