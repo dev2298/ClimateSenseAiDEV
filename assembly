@@ -1,0 +1,128 @@
+#region Assembly NAV.MasterServiceClient, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
+// C:\TFS\NavCommonModules\NAVCOMMONMODULES-MASTER-SyncRollbackForAccountMapping\NavCommonModuleBLL\ReferenceDlls\NAV.MasterServiceClient.dll
+#endregion
+
+using NAV.MasterServiceBusinessObjects;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+
+namespace NAV.MasterServiceClient
+{
+    public class EntityConfigClient : BaseServiceClient
+    {
+        public const string GETSTRATEGYMASTERDATA = "/EntityConfiguration/GetStrategyMasterData";
+        public const string GETCASHCODEMASTERROUTE = "/EntityConfiguration/GetCashCodeMasterData";
+        public const string GETBRIDGESYSTEMMAPINGROUTE = "/EntityConfiguration/GetBridgeSystemMappingData";
+        public const string GETBRIDGESYSTEMMAPINGVIEWROUTE = "/EntityConfiguration/GetBridgeSystemMappingViewData";
+        public const string GETSYSTEMCONFIGURATIONROUTE = "/EntityConfiguration/GetSystemConfiguration?type={0}&clientId={1}";
+        public const string GETTAXRATECONFIG = "/EntityConfiguration/GetTaxRateConfig";
+        public const string GETSECURITYSERVICEURLROUTE = "/EntityConfiguration/GetSecurityServiceUrl?type={0}&clientId={1}";
+        public const string GETSYSTEMCONFIGURATIONFORCLIENTSROUTE = "/EntityConfiguration/GetSystemConfiguration";
+        public const string ISDECOUPLEDMASTER = "IsDecoupledMasterApplicable";
+        public const string GETARCHIVALSERVERSTATUS = "/EntityConfiguration/GetArchivalServerStatus";
+        public const string GETMISCELLANEOUSDATA = "/EntityConfiguration/GetMiscellaneousData";
+        public const string GETCLIENTMISCELLANEOUSDATA = "/EntityConfiguration/GetClientMiscellaneousData";
+        public const string GETTXNCODEMASTERDATA = "/EntityConfiguration/GetTxnCodeMaster";
+        public const string GETTRANSACTIONCODESDATA = "/EntityConfiguration/GetTransactionCodes";
+        public static string GETCUTOFFDATEROUTE;
+        public string GETSYSTEMCONFIGURATIONBYNAMEROUTE;
+
+        public EntityConfigClient(string apiEndpoint);
+
+        public IEnumerable<BridgeSystemMapping> GetBridgeSystemMappingData(string clientIDs, string types);
+        [AsyncStateMachine(typeof(<GetBridgeSystemMappingDataAsync>d__58))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<BridgeSystemMapping>> GetBridgeSystemMappingDataAsync(string clientIDs, string types);
+        public IEnumerable<BridgeSystemMapping> GetBridgeSystemMappingViewData(string clientIDs, string types, string sources);
+        [AsyncStateMachine(typeof(<GetBridgeSystemMappingViewDataAsync>d__60))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<BridgeSystemMapping>> GetBridgeSystemMappingViewDataAsync(string clientIDs, string types, string sources);
+        public IEnumerable<EntityProcessConfiguration> GetBusinessClientLevelEntityConfigurationForClient(string type, string clientIds);
+        [AsyncStateMachine(typeof(<GetBusinessClientLevelEntityConfigurationForClientAsync>d__40))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<EntityProcessConfiguration>> GetBusinessClientLevelEntityConfigurationForClientAsync(string type, string clientIds);
+        public IEnumerable<CashCodeMaster> GetCashCodeMasterData(string Ids);
+        [AsyncStateMachine(typeof(<GetCashCodeMasterDataAsync>d__50))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<CashCodeMaster>> GetCashCodeMasterDataAsync(string Ids);
+        public IEnumerable<CashExtRef> GetCashRefExtData(string Ids);
+        [AsyncStateMachine(typeof(<GetCashRefExtDataAsync>d__52))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<CashExtRef>> GetCashRefExtDataAsync(string Ids);
+        public IEnumerable<EntityProcessConfiguration> GetClientEntityConfigurationData(string type, int clientID);
+        [AsyncStateMachine(typeof(<GetClientEntityConfigurationDataAsync>d__30))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<EntityProcessConfiguration>> GetClientEntityConfigurationDataAsync(string type, int clientID);
+        public IEnumerable<MiscellaneousData> GetClientMiscellaneousData(int ClientId, string Ids);
+        [AsyncStateMachine(typeof(<GetClientMiscellaneousDataAsync>d__56))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<MiscellaneousData>> GetClientMiscellaneousDataAsync(int ClientId, string Ids);
+        public IEnumerable<CutOffDates> GetCutOffDates(string type);
+        [AsyncStateMachine(typeof(<GetCutOffDatesAsync>d__48))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<CutOffDates>> GetCutOffDatesAsync(string type);
+        public IEnumerable<EntityProcessConfiguration> GetEntityConfigurationData(string type);
+        [AsyncStateMachine(typeof(<GetEntityConfigurationDataAsync>d__24))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<EntityProcessConfiguration>> GetEntityConfigurationDataAsync(string type);
+        public IEnumerable<EntityProcessConfiguration> GetEntityConfigurationDataForClients(string type, string clientIds);
+        [AsyncStateMachine(typeof(<GetEntityConfigurationDataForClientsAsync>d__36))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<EntityProcessConfiguration>> GetEntityConfigurationDataForClientsAsync(string type, string clientIds);
+        public IEnumerable<FileConfig> GetFileConfigurationData(string type);
+        [AsyncStateMachine(typeof(<GetFileConfigurationDataAsync>d__28))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<FileConfig>> GetFileConfigurationDataAsync(string type);
+        public IEnumerable<MiscellaneousData> GetMiscellaneousData(string Ids);
+        [AsyncStateMachine(typeof(<GetMiscellaneousDataAsync>d__54))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<MiscellaneousData>> GetMiscellaneousDataAsync(string Ids);
+        public string GetSecurityServiceUrl(string type, int clientID);
+        [AsyncStateMachine(typeof(<GetSecurityServiceUrlAsync>d__32))]
+        [DebuggerStepThrough]
+        public Task<string> GetSecurityServiceUrlAsync(string type, int clientID);
+        public IEnumerable<StrategyMaster> GetStrategyMasterData(int clientID);
+        [AsyncStateMachine(typeof(<GetStrategyMasterDataAsync>d__34))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<StrategyMaster>> GetStrategyMasterDataAsync(int clientID);
+        public IEnumerable<SystemInformation> GetSystemConfigurationData(string type);
+        public IEnumerable<SystemInformation> GetSystemConfigurationData(string clientIds, string types);
+        [AsyncStateMachine(typeof(<GetSystemConfigurationDataAsync>d__44))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<SystemInformation>> GetSystemConfigurationDataAsync(string clientIds, string types);
+        [AsyncStateMachine(typeof(<GetSystemConfigurationDataAsync>d__26))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<SystemInformation>> GetSystemConfigurationDataAsync(string type);
+        public IEnumerable<SystemInformation> GetSystemInformationData(string type);
+        [AsyncStateMachine(typeof(<GetSystemInformationDataAsync>d__42))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<SystemInformation>> GetSystemInformationDataAsync(string type);
+        public IEnumerable<TaxRateConfig> GetTaxRateConfigurations(int clientId, string accountIds);
+        [AsyncStateMachine(typeof(<GetTaxRateConfigurationsAsync>d__38))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<TaxRateConfig>> GetTaxRateConfigurationsAsync(int clientId, string accountIds);
+        public IEnumerable<TransactionCode> GetTransactionCodes();
+        [AsyncStateMachine(typeof(<GetTransactionCodesAsync>d__62))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<TransactionCode>> GetTransactionCodesAsync();
+        public IEnumerable<TxnCodeMaster> GetTxnCodeMaster(int clientId);
+        [AsyncStateMachine(typeof(<GetTxnCodeMasterAsync>d__46))]
+        [DebuggerStepThrough]
+        public Task<IEnumerable<TxnCodeMaster>> GetTxnCodeMasterAsync(int clientId);
+        public bool IsArchivalServerDown();
+        [AsyncStateMachine(typeof(<IsArchivalServerDownAsync>d__71))]
+        [DebuggerStepThrough]
+        public Task<bool> IsArchivalServerDownAsync();
+        public bool IsDecoupledMasterApplicable(int? clientId = null);
+        [AsyncStateMachine(typeof(<IsDecoupledMasterApplicableAsync>d__63))]
+        [DebuggerStepThrough]
+        public Task<bool> IsDecoupledMasterApplicableAsync(int? clientId = null);
+        public Dictionary<int, bool> IsDecoupledMasterApplicableForClients(string clientIds, string serviceName = null);
+        [AsyncStateMachine(typeof(<IsDecoupledMasterApplicableForClientsAsync>d__67))]
+        [DebuggerStepThrough]
+        public Task<Dictionary<int, bool>> IsDecoupledMasterApplicableForClientsAsync(string clientIds, string serviceName = null);
+        public bool IsDecoupledMasterApplicableForService(int? clientId = null, string serviceName = null);
+    }
+}
