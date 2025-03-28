@@ -1,0 +1,268 @@
+
+CREATE PROCEDURE [dbo].[SyncRollbackMaster]
+    @BatchID UNIQUEIDENTIFIER
+AS
+BEGIN
+    SET NOCOUNT ON;
+    BEGIN TRANSACTION;
+
+	-- SET EXECUTION CONTEXT TO CONVEY THE SAME BATCHID TO ALL THE TRIGGERS .
+	declare @a varbinary(128);
+		-- EXEC sp_set_session_context 'BatchID',@BatchID; 
+		SET  @a =	cast( @BatchID  AS VARBINARY(128)) ;
+		set context_info @a;
+
+    -- Rollback INSERT: Delete the inserted records from account_master
+	IF EXISTS (SELECT 1 FROM account_master_log WHERE BatchID = @BatchID)
+	BEGIN
+		DELETE FROM account_master
+		WHERE acc_id IN (
+			SELECT acc_id FROM account_master_log WHERE BatchID = @BatchID AND action = 'I'
+		);
+	END
+
+	-- Rollback INSERT: Delete the inserted records from account_fund_mapping
+	IF EXISTS (SELECT 1 FROM AccountFundMappingLog WHERE BatchID = @BatchID)
+	BEGIN
+		DELETE FROM account_fund_mapping 
+		WHERE AccountFundMappingID in (
+			Select AccountFundMappingID FROM AccountFundMappingLog WHERE BatchID = @BatchID AND action = 'I'
+		);
+	END
+
+	-- Rollback INSERT: Delete the inserted records from account_group
+	IF EXISTS (SELECT 1 FROM account_group_log WHERE BatchID = @BatchID)
+	BEGIN
+		DELETE FROM account_group 
+		WHERE acc_grp_id in (
+			Select acc_grp_id FROM account_group_log WHERE BatchID = @BatchID AND action = 'I'
+		);
+	END
+	-- Rollback INSERT: Delete the inserted records from AccountAttributes
+	IF EXISTS (SELECT 1 FROM AccountAttributesLog WHERE BatchID = @BatchID)
+	BEGIN
+		DELETE FROM AccountAttributes 
+		WHERE AccountAttributesid in (
+			Select AccountAttributesid FROM AccountAttributesLog WHERE BatchID = @BatchID AND action = 'I'
+		);
+	END;
+
+	-- Rollback INSERT: Delete the inserted records from EntityProcessConfiguration
+	IF EXISTS (SELECT 1 FROM AccountAttributesLog WHERE BatchID = @BatchID)
+	BEGIN
+		DELETE FROM EntityProcessConfiguration
+		WHERE EntityProcessConfigID in (
+			Select EntityProcessConfigID FROM EntityProcessConfigurationLog WHERE BatchID = @BatchID AND action = 'I'
+		);
+	END;
+
+
+    -- Rollback UPDATE: Restore original values from account_master_log
+	IF EXISTS (SELECT 1 FROM account_master_log WHERE BatchID = @BatchID)
+	BEGIN
+		UPDATE am
+		SET 
+			am.acc_name = aml.acc_name,
+			am.acc_desc = aml.acc_desc,
+			am.ShortReportingName = aml.ShortReportingName,
+			am.LongReportingName = aml.LongReportingName,
+			am.client_id = aml.client_id,
+			am.broker_id = aml.broker_id,
+			am.base_curr = aml.base_curr,
+			am.status = aml.status,
+			am.ReportingNameType = aml.ReportingNameType,
+			am.group_account = aml.group_account,
+			am.lock_date = aml.lock_date,
+			am.handle_futures = aml.handle_futures,
+			am.account_type = aml.account_type,
+			am.error_limit = aml.error_limit,
+			am.reporting_name = aml.reporting_name,
+			am.reporting_path = aml.reporting_path,
+			am.broker_trade_acceptance_limit = aml.broker_trade_acceptance_limit,
+			am.hold_equity = aml.hold_equity,
+			am.disabled_on_date = aml.disabled_on_date,
+			am.real_broker_id = aml.real_broker_id,
+			am.MDMEntityTypeID = aml.MDMEntityTypeID,
+			am.broker_acc_no = aml.broker_acc_no,
+			am.pns_style = aml.pns_style,
+			am.default_accrual_source = aml.default_accrual_source,
+			am.interest_accrual_check_limit = aml.interest_accrual_check_limit,
+			am.dividend_accrual_check_limit = aml.dividend_accrual_check_limit,
+			am.FundStartDate = NULL,
+			am.AccountingEndDate = aml.AccountingEndDate,
+			am.MDMTopicEntityID = aml.MDMTopicEntityID,
+			am.MDMTradingBehaviour = aml.MDMTradingBehaviour,
+			am.MDMVersionNumber = aml.MDMVersionNumber,
+			am.MDMStartDate = aml.MDMStartDate,
+			am.MDMEndDate = aml.MDMEndDate,
+			am.version_date = aml.version_date,
+			am.version_source = aml.version_source,
+			am.MDMSlaPriority = aml.MDMSlaPriority,
+			am.CreateDate = aml.CreateDate,
+			am.EntityFlag = aml.EntityFlag,
+			am.FasLockDate = aml.FasLockDate
+		FROM account_master am
+		JOIN account_master_log aml ON am.acc_id = aml.acc_id
+		WHERE aml.BatchID = @BatchID AND aml.action = 'U';
+	END
+
+	-- Rollback UPDATE: Restore original values from accountfundmappinglog
+	IF EXISTS (SELECT 1 FROM AccountFundMappingLog WHERE BatchID = @BatchID)
+	BEGIN
+		UPDATE afm
+		SET 
+			afm.client_id = afml.ClientID,
+			afm.broker_id = afml.BrokerID,
+			afm.acc_id = afml.AccountID,
+			afm.fund_id = afml.FundID,
+			afm.VersionDate = afml.VersionDate,
+			afm.VersionSource = afml.VersionSource,
+			afm.EntityRelationshipID = afml.EntityRelationshipID	
+		FROM account_fund_mapping afm
+		JOIN AccountFundMappingLog afml ON afm.AccountFundMappingID = afml.AccountFundMappingID
+		WHERE afml.BatchID = @BatchID AND afml.action = 'U';
+	END
+	-- Rollback UPDATE: Restore original values from accountgrouplog
+	IF EXISTS (SELECT 1 FROM account_group_log WHERE BatchID = @BatchID)
+	BEGIN
+		UPDATE ag
+		SET 
+			ag.grp_id     = agl.grp_id,
+			ag.client_id  = agl.client_id,
+			ag.broker_id  = agl.broker_id,
+			ag.acc_id	  = agl.acc_id
+		FROM account_group ag
+		JOIN account_group_log agl ON ag.acc_grp_id = agl.acc_grp_id
+		WHERE agl.BatchID = @BatchID AND agl.action = 'U';
+	END
+
+	-- Rollback UPDATE: Restore original values from accountattributelog
+	IF EXISTS (SELECT 1 FROM AccountAttributesLog WHERE BatchID = @BatchID)
+	BEGIN
+		UPDATE aa
+		SET 
+			-- aa.AccountAttributesid     = aal.AccountAttributesid,
+			aa.type  = aal.type,
+			aa.value  = aal.Value,
+			aa.description	  = aal.description,
+			aa.valid_from = aal.valid_from,
+			aa.valid_to = aal.valid_to,
+			aa.version_source = aal.version_source,
+			aa.version_date = aal.version_date
+		FROM AccountAttributes aa
+		JOIN AccountAttributesLog aal ON aa.AccountAttributesid = aal.AccountAttributesid
+		WHERE aal.BatchID = @BatchID AND aal.action = 'U'; 
+	END
+
+	-- Rollback UPDATE: Restore original values from EntityProcessConfigurationLog
+	IF EXISTS (SELECT 1 FROM EntityProcessConfigurationLog WHERE BatchID = @BatchID)
+	BEGIN
+		UPDATE epc
+		SET 
+			-- aa.AccountAttributesid     = aal.AccountAttributesid,
+			epc.EntityProcessConfigType  = epcl.EntityProcessConfigType,
+			epc.ClientID  = epcl.ClientID,
+			epc.AccountID	  = epcl.AccountID,
+			epc.ProdType = epcl.ProdType,
+			epc.CurrencyID = epcl.CurrencyID,
+			epc.Country = epcl.Country,
+			epc.Others = epcl.Others,
+			epc.ValidFrom = epcl.ValidFrom,
+			epc.ValidTo = epcl.ValidTo,
+			epc.VersionDate = epcl.VersionDate,
+			epc.VersionSource = epcl.VersionSource,
+			epc.BusinessClientID = epcl.BusinessClientID
+		FROM EntityProcessConfiguration epc
+		JOIN EntityProcessConfigurationLog epcl ON epc.EntityProcessConfigID = epcl.EntityProcessConfigID
+		WHERE epcl.BatchID = @BatchID AND epcl.action = 'U'; 
+	END
+
+
+    -- Rollback DELETE: Restore deleted records from account_master_log
+
+	INSERT INTO account_master (
+			acc_id,acc_name,acc_desc,ShortReportingName,LongReportingName,client_id,broker_id,base_curr,status,
+			ReportingNameType,group_account,lock_date,handle_futures,account_type,error_limit,reporting_name,
+			reporting_path,broker_trade_acceptance_limit,hold_equity,disabled_on_date,
+			real_broker_id,MDMEntityTypeID,broker_acc_no,
+			pns_style,default_accrual_source,interest_accrual_check_limit,
+			dividend_accrual_check_limit,FundStartDate,AccountingEndDate,MDMTopicEntityID,MDMTradingBehaviour,
+			MDMVersionNumber,MDMStartDate,MDMEndDate,version_date,version_source,MDMSlaPriority,
+			CreateDate,EntityFlag,FasLockDate,BatchID )
+            SELECT 
+			acc_id,acc_name,acc_desc,ShortReportingName,LongReportingName,client_id,broker_id,base_curr,status,
+			ReportingNameType,group_account,lock_date,handle_futures,account_type,error_limit,reporting_name,
+			reporting_path,broker_trade_acceptance_limit,hold_equity,disabled_on_date,
+			real_broker_id,MDMEntityTypeID,broker_acc_no,
+			pns_style,default_accrual_source,interest_accrual_check_limit,
+			dividend_accrual_check_limit,NULL,AccountingEndDate,MDMTopicEntityID,MDMTradingBehaviour,
+			MDMVersionNumber,MDMStartDate,MDMEndDate,version_date,version_source,MDMSlaPriority,
+			CreateDate,EntityFlag,FasLockDate,BatchID FROM account_master_log 
+            WHERE BatchID = @BatchID AND action = 'D';
+
+
+    -- Rollback DELETE: Restore deleted records from AccountFundMappingLog
+	BEGIN 
+
+		SET IDENTITY_INSERT account_fund_mapping ON ; 
+		Insert into account_fund_mapping 
+				(AccountFundMappingID,client_id,broker_id,acc_id,fund_id,VersionDate,VersionSource,EntityRelationshipID,BatchID)
+				Select
+				AccountFundMappingID,ClientID,BrokerID,AccountID,FundID,VersionDate,VersionSource,EntityRelationshipID,@BatchID
+				FROM AccountFundMappingLog
+				WHERE BatchID = @BatchID AND action = 'D';
+
+		
+		SET IDENTITY_INSERT account_fund_mapping OFF;
+	END ;
+		
+	-- Rollback DELETE: Restore deleted records from account_group_log
+	BEGIN
+
+		SET IDENTITY_INSERT account_group ON ; 
+	
+		Insert into account_group
+				(acc_grp_id,client_id,broker_id,acc_id)
+				Select
+				acc_grp_id,client_id,broker_id,acc_id
+				FROM account_group_log agl
+				WHERE BatchID = @BatchID AND action = 'D';
+
+		SET IDENTITY_INSERT account_group OFF ;
+
+	END ;
+
+	-- Rollback DELETE: Restore deleted records from AccountAttributesLog
+	BEGIN
+		SET IDENTITY_INSERT AccountAttributes ON ; 
+
+		Insert into AccountAttributes
+				(AccountAttributesid,type,value,description,acc_id,valid_from,valid_to,version_source,version_date)
+				Select
+				AccountAttributesid,type,value,description,acc_id,valid_from,valid_to,version_source,version_date
+				FROM AccountAttributesLog agl
+				WHERE BatchID = @BatchID AND action = 'D';
+
+		SET IDENTITY_INSERT AccountAttributes OFF ; 
+
+	END;
+
+	-- Rollback DELETE: Restore deleted records from EntityProcessConfigurationLog
+	BEGIN
+		SET IDENTITY_INSERT EntityProcessConfiguration ON ; 
+
+		Insert into EntityProcessConfiguration
+				(EntityProcessConfigID,EntityProcessConfigType,ClientID,AccountID,ProdType,CurrencyID,Country,Others,ValidFrom,ValidTo,VersionDate,VersionSource,BusinessClientID)
+				Select
+				EntityProcessConfigID,EntityProcessConfigType,ClientID,AccountID,ProdType,CurrencyID,Country,Others,ValidFrom,ValidTo,VersionDate,VersionSource,BusinessClientID
+				FROM EntityProcessConfigurationLog agl
+				WHERE BatchID = @BatchID AND action = 'D';
+
+		SET IDENTITY_INSERT AccountAttributes OFF ; 
+
+	END;
+
+
+
+    COMMIT TRANSACTION;
+END;
