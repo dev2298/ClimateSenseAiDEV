@@ -1,0 +1,42 @@
+using System;
+
+namespace Common.Utilities
+{
+    public static class RetryHelper
+    {
+        public static void ExecuteWithRetry(Action action, Action rollbackAction, Guid batchID, int maxRetries = 1)
+        {
+            bool success = false;
+            int retryCount = 0;
+
+            while (!success && retryCount < maxRetries)
+            {
+                try
+                {
+                    action.Invoke();
+                    success = true;
+                }
+                catch (Exception ex)
+                {
+                    retryCount++;
+                    if (retryCount == maxRetries)
+                    {
+                        Console.WriteLine($"Retry Failed. Rolling back transaction for BatchID: {batchID}");
+                        try
+                        {
+                            rollbackAction.Invoke();
+                        }
+                        catch (Exception rollbackEx)
+                        {
+                            Console.WriteLine($"Rollback Failed for BatchID {batchID}: {rollbackEx.Message}");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Retry {retryCount}: Error in operation for BatchID: {batchID}. Retrying...");
+                    }
+                }
+            }
+        }
+    }
+}
