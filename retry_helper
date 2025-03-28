@@ -1,42 +1,57 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using NavCommonModuleBLL.Common;
+using NAV.Common.Logging;
 
-namespace Common.Utilities
+
+namespace NavCommonModuleBLL.MDM.Main2
 {
-    public static class RetryHelper
-    {
-        public static void ExecuteWithRetry(Action action, Action rollbackAction, Guid batchID, int maxRetries = 1)
+    
+        public static class RetryHelper
         {
-            bool success = false;
-            int retryCount = 0;
+         ILogger logger = Log4NetService.Instance.GetLogger("Entity");
 
-            while (!success && retryCount < maxRetries)
+        public static void ExecuteWithRetry(Action action, Action rollbackAction, Guid batchID, int maxRetries = 1)
             {
-                try
+                bool success = false;
+                int retryCount = 0;
+
+                while (!success && retryCount < maxRetries)
                 {
-                    action.Invoke();
-                    success = true;
-                }
-                catch (Exception ex)
-                {
-                    retryCount++;
-                    if (retryCount == maxRetries)
+                    try
                     {
-                        Console.WriteLine($"Retry Failed. Rolling back transaction for BatchID: {batchID}");
-                        try
-                        {
-                            rollbackAction.Invoke();
-                        }
-                        catch (Exception rollbackEx)
-                        {
-                            Console.WriteLine($"Rollback Failed for BatchID {batchID}: {rollbackEx.Message}");
-                        }
+                        action.Invoke();
+                        success = true;
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        Console.WriteLine($"Retry {retryCount}: Error in operation for BatchID: {batchID}. Retrying...");
+                        retryCount++;
+                        if (retryCount == maxRetries)
+                        {
+                            logger.Critical($"Retry Failed. Rolling back transaction for BatchID: {batchID}");
+                            try
+                            {
+                                rollbackAction.Invoke();
+                            }
+                            catch (Exception rollbackEx)
+                            {
+                            string message = SendTeamsNotifications.GetNotificationCardForError("Rollback Failed for BatchID :" + primaryOperationId, ex.Message, "BatchID", operationId);
+                            SendTeamsNotifications.SendInfoToMsTeams(message, AppConfiguration.MessageSendServiceAPI, AppConfiguration.TeamsChannelURL);
+                            logger.Critical($" Error in Rollback operation for BatchID: {BatchID}", ex);
+                           
+                                
+                            }
+                        }
+                        else
+                        {
+                            logger.Critical($"Retry {retryCount}: Error in operation for BatchID: {batchID}. Retrying...");
+                        }
                     }
                 }
             }
         }
     }
-}
+
