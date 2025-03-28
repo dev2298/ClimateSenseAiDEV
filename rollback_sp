@@ -6,51 +6,171 @@ BEGIN
     BEGIN TRANSACTION;
 
     BEGIN TRY
-        -- SET EXECUTION CONTEXT TO CONVEY THE SAME BATCHID TO ALL THE TRIGGERS .
+        -- SET EXECUTION CONTEXT TO CONVEY THE SAME BATCHID TO ALL THE TRIGGERS
         DECLARE @a VARBINARY(128);
         SET @a = CAST(@BatchID AS VARBINARY(128));
         SET CONTEXT_INFO @a;
 
-        -- Rollback INSERT operations
-        IF EXISTS (SELECT 1 FROM account_master_log WHERE BatchID = @BatchID)
+        /*========================================
+        =========== ACCOUNT MASTER ==============
+        ========================================*/
+        -- DELETE
+        IF EXISTS (SELECT 1 FROM account_master_log WITH (NOLOCK) WHERE BatchID = @BatchID)
         BEGIN
             DELETE FROM account_master
             WHERE acc_id IN (
-                SELECT acc_id FROM account_master_log WHERE BatchID = @BatchID AND action = 'I'
+                SELECT acc_id FROM account_master_log WITH (NOLOCK) WHERE BatchID = @BatchID AND action = 'I'
             );
         END
 
-        IF EXISTS (SELECT 1 FROM AccountFundMappingLog WHERE BatchID = @BatchID)
-        BEGIN
-            DELETE FROM account_fund_mapping 
-            WHERE AccountFundMappingID IN (
-                SELECT AccountFundMappingID FROM AccountFundMappingLog WHERE BatchID = @BatchID AND action = 'I'
-            );
-        END
-
-        -- Similar DELETE operations for other tables...
-
-        -- Rollback UPDATE operations
-        IF EXISTS (SELECT 1 FROM account_master_log WHERE BatchID = @BatchID)
+        -- UPDATE
+        IF EXISTS (SELECT 1 FROM account_master_log WITH (NOLOCK) WHERE BatchID = @BatchID)
         BEGIN
             UPDATE am
             SET am.acc_name = aml.acc_name,
-                am.acc_desc = aml.acc_desc
-                -- Other columns...
+                am.acc_desc = aml.acc_desc,
+                am.client_id = aml.client_id,
+                am.broker_id = aml.broker_id
             FROM account_master am
-            JOIN account_master_log aml ON am.acc_id = aml.acc_id
+            JOIN account_master_log aml WITH (NOLOCK) ON am.acc_id = aml.acc_id
             WHERE aml.BatchID = @BatchID AND aml.action = 'U';
         END
 
-        -- Similar UPDATE operations for other tables...
-
-        -- Rollback DELETE operations (Reinsert records)
-        INSERT INTO account_master (acc_id, acc_name, acc_desc, BatchID)
-        SELECT acc_id, acc_name, acc_desc, BatchID 
-        FROM account_master_log 
+        -- INSERT (Restore Deleted)
+        INSERT INTO account_master (acc_id, acc_name, acc_desc, client_id, broker_id, BatchID)
+        SELECT acc_id, acc_name, acc_desc, client_id, broker_id, BatchID
+        FROM account_master_log WITH (NOLOCK)
         WHERE BatchID = @BatchID AND action = 'D';
 
-        -- Similar INSERT operations for other tables...
+        /*========================================
+        =========== ACCOUNT FUND MAPPING ========
+        ========================================*/
+        -- DELETE
+        IF EXISTS (SELECT 1 FROM AccountFundMappingLog WITH (NOLOCK) WHERE BatchID = @BatchID)
+        BEGIN
+            DELETE FROM account_fund_mapping 
+            WHERE AccountFundMappingID IN (
+                SELECT AccountFundMappingID FROM AccountFundMappingLog WITH (NOLOCK) WHERE BatchID = @BatchID AND action = 'I'
+            );
+        END
+
+        -- UPDATE
+        IF EXISTS (SELECT 1 FROM AccountFundMappingLog WITH (NOLOCK) WHERE BatchID = @BatchID)
+        BEGIN
+            UPDATE afm
+            SET afm.client_id = afml.ClientID,
+                afm.broker_id = afml.BrokerID,
+                afm.acc_id = afml.AccountID,
+                afm.fund_id = afml.FundID
+            FROM account_fund_mapping afm
+            JOIN AccountFundMappingLog afml WITH (NOLOCK) ON afm.AccountFundMappingID = afml.AccountFundMappingID
+            WHERE afml.BatchID = @BatchID AND afml.action = 'U';
+        END
+
+        -- INSERT (Restore Deleted)
+        SET IDENTITY_INSERT account_fund_mapping ON;
+        INSERT INTO account_fund_mapping (AccountFundMappingID, client_id, broker_id, acc_id, fund_id, BatchID)
+        SELECT AccountFundMappingID, ClientID, BrokerID, AccountID, FundID, BatchID
+        FROM AccountFundMappingLog WITH (NOLOCK)
+        WHERE BatchID = @BatchID AND action = 'D';
+        SET IDENTITY_INSERT account_fund_mapping OFF;
+
+        /*========================================
+        =========== ACCOUNT GROUP ===============
+        ========================================*/
+        -- DELETE
+        IF EXISTS (SELECT 1 FROM account_group_log WITH (NOLOCK) WHERE BatchID = @BatchID)
+        BEGIN
+            DELETE FROM account_group 
+            WHERE acc_grp_id IN (
+                SELECT acc_grp_id FROM account_group_log WITH (NOLOCK) WHERE BatchID = @BatchID AND action = 'I'
+            );
+        END
+
+        -- UPDATE
+        IF EXISTS (SELECT 1 FROM account_group_log WITH (NOLOCK) WHERE BatchID = @BatchID)
+        BEGIN
+            UPDATE ag
+            SET ag.grp_id = agl.grp_id,
+                ag.client_id = agl.client_id,
+                ag.broker_id = agl.broker_id,
+                ag.acc_id = agl.acc_id
+            FROM account_group ag
+            JOIN account_group_log agl WITH (NOLOCK) ON ag.acc_grp_id = agl.acc_grp_id
+            WHERE agl.BatchID = @BatchID AND agl.action = 'U';
+        END
+
+        -- INSERT (Restore Deleted)
+        SET IDENTITY_INSERT account_group ON;
+        INSERT INTO account_group (acc_grp_id, client_id, broker_id, acc_id, BatchID)
+        SELECT acc_grp_id, client_id, broker_id, acc_id, BatchID
+        FROM account_group_log WITH (NOLOCK)
+        WHERE BatchID = @BatchID AND action = 'D';
+        SET IDENTITY_INSERT account_group OFF;
+
+        /*========================================
+        =========== ACCOUNT ATTRIBUTES ==========
+        ========================================*/
+        -- DELETE
+        IF EXISTS (SELECT 1 FROM AccountAttributesLog WITH (NOLOCK) WHERE BatchID = @BatchID)
+        BEGIN
+            DELETE FROM AccountAttributes 
+            WHERE AccountAttributesid IN (
+                SELECT AccountAttributesid FROM AccountAttributesLog WITH (NOLOCK) WHERE BatchID = @BatchID AND action = 'I'
+            );
+        END
+
+        -- UPDATE
+        IF EXISTS (SELECT 1 FROM AccountAttributesLog WITH (NOLOCK) WHERE BatchID = @BatchID)
+        BEGIN
+            UPDATE aa
+            SET aa.type = aal.type,
+                aa.value = aal.Value,
+                aa.description = aal.description
+            FROM AccountAttributes aa
+            JOIN AccountAttributesLog aal WITH (NOLOCK) ON aa.AccountAttributesid = aal.AccountAttributesid
+            WHERE aal.BatchID = @BatchID AND aal.action = 'U';
+        END
+
+        -- INSERT (Restore Deleted)
+        SET IDENTITY_INSERT AccountAttributes ON;
+        INSERT INTO AccountAttributes (AccountAttributesid, type, value, description, BatchID)
+        SELECT AccountAttributesid, type, value, description, BatchID
+        FROM AccountAttributesLog WITH (NOLOCK)
+        WHERE BatchID = @BatchID AND action = 'D';
+        SET IDENTITY_INSERT AccountAttributes OFF;
+
+        /*========================================
+        =========== ENTITY PROCESS CONFIGURATION
+        ========================================*/
+        -- DELETE
+        IF EXISTS (SELECT 1 FROM EntityProcessConfigurationLog WITH (NOLOCK) WHERE BatchID = @BatchID)
+        BEGIN
+            DELETE FROM EntityProcessConfiguration
+            WHERE EntityProcessConfigID IN (
+                SELECT EntityProcessConfigID FROM EntityProcessConfigurationLog WITH (NOLOCK) WHERE BatchID = @BatchID AND action = 'I'
+            );
+        END
+
+        -- UPDATE
+        IF EXISTS (SELECT 1 FROM EntityProcessConfigurationLog WITH (NOLOCK) WHERE BatchID = @BatchID)
+        BEGIN
+            UPDATE epc
+            SET epc.EntityProcessConfigType = epcl.EntityProcessConfigType,
+                epc.ClientID = epcl.ClientID,
+                epc.AccountID = epcl.AccountID
+            FROM EntityProcessConfiguration epc
+            JOIN EntityProcessConfigurationLog epcl WITH (NOLOCK) ON epc.EntityProcessConfigID = epcl.EntityProcessConfigID
+            WHERE epcl.BatchID = @BatchID AND epcl.action = 'U';
+        END
+
+        -- INSERT (Restore Deleted)
+        SET IDENTITY_INSERT EntityProcessConfiguration ON;
+        INSERT INTO EntityProcessConfiguration (EntityProcessConfigID, EntityProcessConfigType, ClientID, AccountID, BatchID)
+        SELECT EntityProcessConfigID, EntityProcessConfigType, ClientID, AccountID, BatchID
+        FROM EntityProcessConfigurationLog WITH (NOLOCK)
+        WHERE BatchID = @BatchID AND action = 'D';
+        SET IDENTITY_INSERT EntityProcessConfiguration OFF;
 
         COMMIT TRANSACTION;
     END TRY
