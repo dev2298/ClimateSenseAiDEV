@@ -1,0 +1,36 @@
+private void ExecuteWithRetry(Action action, Action rollbackAction, Guid BatchID)
+        {
+            bool success = false;
+            int retryCount = 0;
+            int maxRetries = 1;
+
+            while (!success && retryCount < maxRetries)
+            {
+                try
+                {
+                    action.Invoke(); // Execute the provided action
+                    success = true;  // Mark success if no exception occurs
+                }
+                catch (Exception ex)
+                {
+                    retryCount++;
+                    if (retryCount == maxRetries)
+                    {
+                        logger.Critical($"Retry Failed. Rolling back transaction for Master: {BatchID}", ex);
+                        try
+                        {
+                            rollbackAction.Invoke(); // Call rollback method
+                        }
+                        catch (Exception rollbackEx)
+                        {
+                            string message = SendTeamsNotifications.GetNotificationCardForError("Rollback Failed for BatchID :" + primaryOperationId, rollbackEx.Message, "BatchID", operationId);
+                            SendTeamsNotifications.SendInfoToMsTeams(message, AppConfiguration.MessageSendServiceAPI, AppConfiguration.TeamsChannelURL);
+                        }
+                    }
+                    else
+                    {
+                        logger.Critical($"Retry {retryCount}: Error in operation for BatchID: {BatchID}. Retrying...", ex);
+                    }
+                }
+            }
+        }
