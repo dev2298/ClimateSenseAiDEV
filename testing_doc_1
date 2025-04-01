@@ -1,26 +1,68 @@
-int attempt = 0;
-        bool success = false;
+        private int SaveAccountMasterDataClient(int clientId, string accountXML, string versionSource, bool isDecoupledMasterApplicable, EntityConfigClient entityConfigClient,Guid operationId,   out  DataSet dsDataForSave)
+        {            
+            //Checking for Decoupling
+            ClientServiceClient clientServiceClient = new ClientServiceClient(AppConfiguration.Main2MastersAPI);
+            var clientData = clientServiceClient.GetClientMasterData(clientId.ToString());            
+            var systemInformation = entityConfigClient.GetSystemInformationData("BrokerNotDisabled");
+            var system_information_entityType = entityConfigClient.GetSystemConfigurationData(clientId.ToString(),"ENTITYTYPE");
+            var rollbackconfig = entityConfigClient.GetSystemConfigurationData(clientId.ToString(), "AccountRollbackEnabled");
+            Dictionary<int, bool> isSyncRollbackEnabled = rollbackconfig.ToDictionary(c => c.ClientId, c => c.Value == "true");
 
-        while (attempt < 2 && !success)
-        {
-            try
+            if(isSyncRollbackEnabled.ContainsKey(clientId) || isSyncRollbackEnabled.ContainsKey(0))
             {
-                // Attempt the primary action
-                primaryAction();
-                success = true; // If primary action succeeds, exit the loop
-            }
-            catch (Exception)
-            {
-                if (attempt == 0)
+                int attempt = 0;
+                bool success = false;
+
+                while (attempt < 2 && !success)
                 {
-                    // If it's the first failure, retry once
-                    attempt++;
+                    try
+                    {
+                        // Attempt the primary action
+                       return AccountMasterDAL.SyncDataToClient(primaryOperationId, out dsDataForSave ,clientId);
+                        success = true; // If primary action succeeds, exit the loop
+                    }
+                    catch (Exception)
+                    {
+                        if (attempt == 0)
+                        {
+                            // If it's the first failure, retry once
+                            attempt++;
+                        }
+                        else
+                        {
+                            // If retry also fails, execute secondary action
+                            try
+                            {
+                                AccountMasterDAL.RollbackTransaction(primaryOperationId);
+                            }
+                            catch(Exception ex)
+                            {
+                                _logger.Error.Write($"Error Rolling back Account master data on Main2 Side : {ex.Message}");
+                                string message = CommonBLL.GetNotificationCardForError("Rollback failed for BatchID:"+primaryOperationId,ex.Message , "Master", operationId);
+                                CommonBLL.SendInfoToMsTeams(message, AppConfiguration.MessageSendServiceAPI, AppConfiguration.AccountDataDiscrepancyTeamsChannelURL);
+                            }
+                            
+                            break; 
+                        }
+                    }
+                }
+
+            }
+            else
+            {
+                if (isDecoupledMasterApplicable)
+                {
+                    var clienDataXML = Generic.ToXml(clientData.ToList());
+                    var systemInformationXML = Generic.ToXml(systemInformation.ToList());
+                    var system_information_entityTypeXML = Generic.ToXml(system_information_entityType.ToList());
+                    return AccountMasterDAL.SaveAccountMasterDataClient(clientId, accountXML, clienDataXML, systemInformationXML, system_information_entityTypeXML, CommonBLL.LoginName, out dsDataForSave);
+
+
                 }
                 else
                 {
-                    // If retry also fails, execute secondary action
-                    secondaryAction();
-                    break; // Exit the loop after executing the secondary action
+                    return AccountMasterDAL.SaveAccountMasterDataClient(clientId, accountXML, CommonBLL.LoginName, out dsDataForSave);
                 }
             }
+            
         }
