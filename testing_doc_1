@@ -1,4 +1,26 @@
-RetryHelper.ExecuteWithRetry(
-                                   () => AccountMasterDAL.SyncDataToClient(primaryOperationId, clientId, out dsDataForSave),// Main action
-                                   () => AccountMasterDAL.RollbackTransaction(primaryOperationId),         // Rollback action
-                               primaryOperationId);
+int attempt = 0;
+        bool success = false;
+
+        while (attempt < 2 && !success)
+        {
+            try
+            {
+                // Attempt the primary action
+                primaryAction();
+                success = true; // If primary action succeeds, exit the loop
+            }
+            catch (Exception)
+            {
+                if (attempt == 0)
+                {
+                    // If it's the first failure, retry once
+                    attempt++;
+                }
+                else
+                {
+                    // If retry also fails, execute secondary action
+                    secondaryAction();
+                    break; // Exit the loop after executing the secondary action
+                }
+            }
+        }
