@@ -1,1 +1,44 @@
-   FROM OPENXML(@hdoc, '//dsAccountMasterLog/dtAccountMasterLog',2)     --- explain this piece of syntax
+<AccountMasterLog>
+    <RowID>1</RowID>
+    <acc_id>6890</acc_id>
+    <acc_name>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</acc_name>
+    <acc_desc>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</acc_desc>
+    <ShortReportingName>PINEY POINT ONSHORE FUND LP GR</ShortReportingName>
+    <LongReportingName>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</LongReportingName>
+    <ReportingNameType>2</ReportingNameType>
+    <client_id>351</client_id>
+    <broker_id>43</broker_id>
+    <base_curr>10</base_curr>
+    <status>69</status>
+    <group_account>89</group_account>
+    <lock_date>2025-03-02T00:00:00</lock_date>
+    <handle_futures xsi:nil="true" />
+    <account_type>GROUP</account_type>
+    <error_limit xsi:nil="true" />
+    <reporting_name>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</reporting_name>
+    <reporting_path />
+    <broker_trade_acceptance_limit xsi:nil="true" />
+    <hold_equity>True</hold_equity>
+    <disabled_on_date xsi:nil="true" />
+    <real_broker_id>0</real_broker_id>
+    <MDMEntityTypeID>1</MDMEntityTypeID>
+    <broker_acc_no />
+    <pns_style />
+    <default_accrual_source />
+    <interest_accrual_check_limit xsi:nil="true" />
+    <dividend_accrual_check_limit xsi:nil="true" />
+    <version_date>2025-04-02T16:09:04.857</version_date>
+    <version_source>MDM</version_source>
+    <AccountingEndDate xsi:nil="true" />
+    <MDMTopicEntityID>13888</MDMTopicEntityID>
+    <MDMTradingBehaviour>TRADER</MDMTradingBehaviour>
+    <MDMVersionNumber>AAAAABI9nDk=</MDMVersionNumber>
+    <MDMStartDate>2014-07-01T00:00:00</MDMStartDate>
+    <MDMEndDate>9999-12-31T00:00:00</MDMEndDate>
+    <MDMSlaPriority>4</MDMSlaPriority>
+    <CreateDate xsi:nil="true" />
+    <EntityFlag>1</EntityFlag>
+    <FasLockDate xsi:nil="true" />
+    <Action>U</Action>
+    <FundStartDate xsi:nil="true" />
+  </AccountMasterLog>
