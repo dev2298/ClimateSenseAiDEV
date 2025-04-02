@@ -1,0 +1,64 @@
+DECLARE @hdoc INT
+DECLARE @xml XML = 
+N'<AccountMasterLog>
+    <RowID>1</RowID>
+    <acc_id>6890</acc_id>
+    <acc_name>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</acc_name>
+    <acc_desc>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</acc_desc>
+    <ShortReportingName>PINEY POINT ONSHORE FUND LP GR</ShortReportingName>
+    <LongReportingName>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</LongReportingName>
+    <ReportingNameType>2</ReportingNameType>
+    <client_id>351</client_id>
+    <broker_id>43</broker_id>
+    <base_curr>10</base_curr>
+    <status>69</status>
+    <group_account>89</group_account>
+    <lock_date>2025-03-02T00:00:00</lock_date>
+    <account_type>GROUP</account_type>
+    <reporting_name>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</reporting_name>
+    <version_date>2025-04-02T16:09:04.857</version_date>
+    <version_source>MDM</version_source>
+    <MDMTopicEntityID>13888</MDMTopicEntityID>
+    <MDMTradingBehaviour>TRADER</MDMTradingBehaviour>
+    <MDMVersionNumber>AAAAABI9nDk=</MDMVersionNumber>
+    <MDMStartDate>2014-07-01T00:00:00</MDMStartDate>
+    <MDMEndDate>9999-12-31T00:00:00</MDMEndDate>
+    <MDMSlaPriority>4</MDMSlaPriority>
+    <Action>U</Action>
+</AccountMasterLog>'
+
+-- Prepare XML document
+EXEC sp_xml_preparedocument @hdoc OUTPUT, @xml
+
+-- Extract data using OPENXML
+SELECT *
+FROM OPENXML(@hdoc, '/AccountMasterLog', 2)
+WITH (
+    RowID INT 'RowID',
+    acc_id INT 'acc_id',
+    acc_name NVARCHAR(255) 'acc_name',
+    acc_desc NVARCHAR(255) 'acc_desc',
+    ShortReportingName NVARCHAR(100) 'ShortReportingName',
+    LongReportingName NVARCHAR(255) 'LongReportingName',
+    ReportingNameType INT 'ReportingNameType',
+    client_id INT 'client_id',
+    broker_id INT 'broker_id',
+    base_curr INT 'base_curr',
+    status INT 'status',
+    group_account INT 'group_account',
+    lock_date DATETIME 'lock_date',
+    account_type NVARCHAR(50) 'account_type',
+    reporting_name NVARCHAR(255) 'reporting_name',
+    version_date DATETIME 'version_date',
+    version_source NVARCHAR(50) 'version_source',
+    MDMTopicEntityID INT 'MDMTopicEntityID',
+    MDMTradingBehaviour NVARCHAR(50) 'MDMTradingBehaviour',
+    MDMVersionNumber NVARCHAR(50) 'MDMVersionNumber',
+    MDMStartDate DATETIME 'MDMStartDate',
+    MDMEndDate DATETIME 'MDMEndDate',
+    MDMSlaPriority INT 'MDMSlaPriority',
+    Action NVARCHAR(5) 'Action'
+)
+
+-- Clean up
+EXEC sp_xml_removedocument @hdoc
