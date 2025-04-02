@@ -1,0 +1,1 @@
+   FROM OPENXML(@hdoc, '//dsAccountMasterLog/dtAccountMasterLog',2)     --- explain this piece of syntax
