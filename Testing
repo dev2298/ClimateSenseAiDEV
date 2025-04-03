@@ -1,134 +1,22 @@
-   EXEC sp_xml_preparedocument @hdoc OUTPUT, @accountMasterLogXML        
-        
-   INSERT #accountMaster(
-			acc_id ,
-		acc_name ,
-		acc_desc ,
-		ShortReportingName ,
-		LongReportingName ,
-		ReportingNameType ,
-		client_id ,
-		broker_id ,
-		base_curr ,
-		status ,
-		group_account ,
-		lock_date ,
-		handle_futures ,
-		account_type ,
-		error_limit  ,
-		reporting_name ,
-		reporting_path ,
-		broker_trade_acceptance_limit  ,
-		hold_equity  ,
-		disabled_on_date ,
-		real_broker_id ,
-		MDMEntityTypeID ,
-		broker_acc_no ,
-		pns_style ,
-		default_accrual_source ,
-		interest_accrual_check_limit ,
-		dividend_accrual_check_limit ,
-		version_date ,
-		version_source ,
-		AccountingEndDate ,
-		MDMTopicEntityID ,
-		MDMTradingBehaviour ,
-		MDMVersionNumber ,
-		MDMStartDate ,
-		MDMEndDate ,
-		MDMSlaPriority ,
-		CreateDate ,
-		EntityFlag ,
-		FasLockDate ,
-		Action ,
-		FundStartDate,
-		BatchID
-	)       
-   SELECT 
-		acc_id ,
-		acc_name ,
-		acc_desc ,
-		ShortReportingName ,
-		LongReportingName ,
-		ReportingNameType ,
-		client_id ,
-		broker_id ,
-		base_curr ,
-		status ,
-		group_account ,
-		lock_date ,
-		handle_futures ,
-		account_type ,
-		error_limit  ,
-		reporting_name ,
-		reporting_path ,
-		broker_trade_acceptance_limit  ,
-		hold_equity  ,
-		disabled_on_date ,
-		real_broker_id ,
-		MDMEntityTypeID ,
-		broker_acc_no ,
-		pns_style ,
-		default_accrual_source ,
-		interest_accrual_check_limit ,
-		dividend_accrual_check_limit ,
-		version_date ,
-		version_source ,
-		AccountingEndDate ,
-		MDMTopicEntityID ,
-		MDMTradingBehaviour ,
-		MDMVersionNumber ,
-		MDMStartDate ,
-		MDMEndDate ,
-		MDMSlaPriority ,
-		CreateDate ,
-		EntityFlag ,
-		FasLockDate ,
-		Action ,
-		FundStartDate,
-		BatchID
-   FROM OPENXML(@hdoc, '/ArrayOfAccountMasterLog/AccountMasterLog',2)        
-   WITH        
-   (
-		acc_id INT,
-	acc_name NVARCHAR(255),
-	acc_desc NVARCHAR(255),
-	ShortReportingName NVARCHAR(100),
-	LongReportingName NVARCHAR(255),
-	ReportingNameType INT,
-	client_id INT,
-	broker_id INT,
-	base_curr INT,
-	status CHAR(1),
-	group_account INT,
-	lock_date DATETIME,
-	handle_futures char(1),
-	account_type NVARCHAR(50),
-	error_limit FLOAT ,
-	reporting_name UDTLongName,
-	reporting_path VARCHAR(100),
-	broker_trade_acceptance_limit FLOAT ,
-	hold_equity BIT ,
-	disabled_on_date DATETIME,
-	real_broker_id INT,
-	MDMEntityTypeID TINYINT,
-	broker_acc_no VARCHAR(30),
-	pns_style VARCHAR(255),
-	default_accrual_source VARCHAR(30),
-	interest_accrual_check_limit FLOAT,
-	dividend_accrual_check_limit FLOAT,
-	version_date DATETIME,
-	version_source VARCHAR(30),
-	AccountingEndDate DATE,
-	MDMTopicEntityID INT,
-	MDMTradingBehaviour VARCHAR(120),
-	MDMVersionNumber BINARY(8),
-	MDMStartDate DATE,
-	MDMEndDate DATE,
-	MDMSlaPriority TINYINT,
-	CreateDate DATETIME,
-	EntityFlag TINYINT,
-	FasLockDate DATE,
-	Action CHAR(1),
-	FundStartDate DATETIME,
-	BatchID UniqueIdentifier ) 
+ELETE am
+FROM account_master am
+WHERE EXISTS (
+    SELECT 1 
+    FROM account_master_log aml WITH (NOLOCK)
+    WHERE aml.BatchID = @BatchID 
+    AND aml.action = 'I' 
+    AND aml.acc_id = am.acc_id
+);
+
+-- INSERT (Rollback Deleted Records, but only if not deleted in this rollback)
+INSERT INTO account_master (acc_id, acc_name, acc_desc, client_id, broker_id, BatchID)
+SELECT aml.acc_id, aml.acc_name, aml.acc_desc, aml.client_id, aml.broker_id, aml.BatchID
+FROM account_master_log aml WITH (NOLOCK)
+WHERE aml.BatchID = @BatchID 
+AND aml.action = 'D'
+AND NOT EXISTS (
+    SELECT 1 FROM account_master_log amlog 
+    WHERE amlog.BatchID = @BatchID 
+    AND amlog.action = 'I' 
+    AND amlog.acc_id = aml.acc_id
+);
