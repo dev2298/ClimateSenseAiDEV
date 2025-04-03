@@ -1,64 +1,134 @@
-DECLARE @hdoc INT
-DECLARE @xml XML = 
-N'<AccountMasterLog>
-    <RowID>1</RowID>
-    <acc_id>6890</acc_id>
-    <acc_name>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</acc_name>
-    <acc_desc>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</acc_desc>
-    <ShortReportingName>PINEY POINT ONSHORE FUND LP GR</ShortReportingName>
-    <LongReportingName>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</LongReportingName>
-    <ReportingNameType>2</ReportingNameType>
-    <client_id>351</client_id>
-    <broker_id>43</broker_id>
-    <base_curr>10</base_curr>
-    <status>69</status>
-    <group_account>89</group_account>
-    <lock_date>2025-03-02T00:00:00</lock_date>
-    <account_type>GROUP</account_type>
-    <reporting_name>PINEY POINT ONSHORE FUND LP GROUP_Testing_206</reporting_name>
-    <version_date>2025-04-02T16:09:04.857</version_date>
-    <version_source>MDM</version_source>
-    <MDMTopicEntityID>13888</MDMTopicEntityID>
-    <MDMTradingBehaviour>TRADER</MDMTradingBehaviour>
-    <MDMVersionNumber>AAAAABI9nDk=</MDMVersionNumber>
-    <MDMStartDate>2014-07-01T00:00:00</MDMStartDate>
-    <MDMEndDate>9999-12-31T00:00:00</MDMEndDate>
-    <MDMSlaPriority>4</MDMSlaPriority>
-    <Action>U</Action>
-</AccountMasterLog>'
-
--- Prepare XML document
-EXEC sp_xml_preparedocument @hdoc OUTPUT, @xml
-
--- Extract data using OPENXML
-SELECT *
-FROM OPENXML(@hdoc, '/AccountMasterLog', 2)
-WITH (
-    RowID INT 'RowID',
-    acc_id INT 'acc_id',
-    acc_name NVARCHAR(255) 'acc_name',
-    acc_desc NVARCHAR(255) 'acc_desc',
-    ShortReportingName NVARCHAR(100) 'ShortReportingName',
-    LongReportingName NVARCHAR(255) 'LongReportingName',
-    ReportingNameType INT 'ReportingNameType',
-    client_id INT 'client_id',
-    broker_id INT 'broker_id',
-    base_curr INT 'base_curr',
-    status INT 'status',
-    group_account INT 'group_account',
-    lock_date DATETIME 'lock_date',
-    account_type NVARCHAR(50) 'account_type',
-    reporting_name NVARCHAR(255) 'reporting_name',
-    version_date DATETIME 'version_date',
-    version_source NVARCHAR(50) 'version_source',
-    MDMTopicEntityID INT 'MDMTopicEntityID',
-    MDMTradingBehaviour NVARCHAR(50) 'MDMTradingBehaviour',
-    MDMVersionNumber NVARCHAR(50) 'MDMVersionNumber',
-    MDMStartDate DATETIME 'MDMStartDate',
-    MDMEndDate DATETIME 'MDMEndDate',
-    MDMSlaPriority INT 'MDMSlaPriority',
-    Action NVARCHAR(5) 'Action'
-)
-
--- Clean up
-EXEC sp_xml_removedocument @hdoc
+   EXEC sp_xml_preparedocument @hdoc OUTPUT, @accountMasterLogXML        
+        
+   INSERT #accountMaster(
+			acc_id ,
+		acc_name ,
+		acc_desc ,
+		ShortReportingName ,
+		LongReportingName ,
+		ReportingNameType ,
+		client_id ,
+		broker_id ,
+		base_curr ,
+		status ,
+		group_account ,
+		lock_date ,
+		handle_futures ,
+		account_type ,
+		error_limit  ,
+		reporting_name ,
+		reporting_path ,
+		broker_trade_acceptance_limit  ,
+		hold_equity  ,
+		disabled_on_date ,
+		real_broker_id ,
+		MDMEntityTypeID ,
+		broker_acc_no ,
+		pns_style ,
+		default_accrual_source ,
+		interest_accrual_check_limit ,
+		dividend_accrual_check_limit ,
+		version_date ,
+		version_source ,
+		AccountingEndDate ,
+		MDMTopicEntityID ,
+		MDMTradingBehaviour ,
+		MDMVersionNumber ,
+		MDMStartDate ,
+		MDMEndDate ,
+		MDMSlaPriority ,
+		CreateDate ,
+		EntityFlag ,
+		FasLockDate ,
+		Action ,
+		FundStartDate,
+		BatchID
+	)       
+   SELECT 
+		acc_id ,
+		acc_name ,
+		acc_desc ,
+		ShortReportingName ,
+		LongReportingName ,
+		ReportingNameType ,
+		client_id ,
+		broker_id ,
+		base_curr ,
+		status ,
+		group_account ,
+		lock_date ,
+		handle_futures ,
+		account_type ,
+		error_limit  ,
+		reporting_name ,
+		reporting_path ,
+		broker_trade_acceptance_limit  ,
+		hold_equity  ,
+		disabled_on_date ,
+		real_broker_id ,
+		MDMEntityTypeID ,
+		broker_acc_no ,
+		pns_style ,
+		default_accrual_source ,
+		interest_accrual_check_limit ,
+		dividend_accrual_check_limit ,
+		version_date ,
+		version_source ,
+		AccountingEndDate ,
+		MDMTopicEntityID ,
+		MDMTradingBehaviour ,
+		MDMVersionNumber ,
+		MDMStartDate ,
+		MDMEndDate ,
+		MDMSlaPriority ,
+		CreateDate ,
+		EntityFlag ,
+		FasLockDate ,
+		Action ,
+		FundStartDate,
+		BatchID
+   FROM OPENXML(@hdoc, '/ArrayOfAccountMasterLog/AccountMasterLog',2)        
+   WITH        
+   (
+		acc_id INT,
+	acc_name NVARCHAR(255),
+	acc_desc NVARCHAR(255),
+	ShortReportingName NVARCHAR(100),
+	LongReportingName NVARCHAR(255),
+	ReportingNameType INT,
+	client_id INT,
+	broker_id INT,
+	base_curr INT,
+	status CHAR(1),
+	group_account INT,
+	lock_date DATETIME,
+	handle_futures char(1),
+	account_type NVARCHAR(50),
+	error_limit FLOAT ,
+	reporting_name UDTLongName,
+	reporting_path VARCHAR(100),
+	broker_trade_acceptance_limit FLOAT ,
+	hold_equity BIT ,
+	disabled_on_date DATETIME,
+	real_broker_id INT,
+	MDMEntityTypeID TINYINT,
+	broker_acc_no VARCHAR(30),
+	pns_style VARCHAR(255),
+	default_accrual_source VARCHAR(30),
+	interest_accrual_check_limit FLOAT,
+	dividend_accrual_check_limit FLOAT,
+	version_date DATETIME,
+	version_source VARCHAR(30),
+	AccountingEndDate DATE,
+	MDMTopicEntityID INT,
+	MDMTradingBehaviour VARCHAR(120),
+	MDMVersionNumber BINARY(8),
+	MDMStartDate DATE,
+	MDMEndDate DATE,
+	MDMSlaPriority TINYINT,
+	CreateDate DATETIME,
+	EntityFlag TINYINT,
+	FasLockDate DATE,
+	Action CHAR(1),
+	FundStartDate DATETIME,
+	BatchID UniqueIdentifier ) 
