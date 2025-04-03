@@ -1,0 +1,77 @@
+IF EXISTS (SELECT 1 FROM account_master_log WITH (NOLOCK) WHERE BatchID = @BatchID AND action = 'U')
+        BEGIN
+            UPDATE am
+		SET 
+			am.acc_name = aml.acc_name,
+			am.acc_desc = aml.acc_desc,
+			am.ShortReportingName = aml.ShortReportingName,
+			am.LongReportingName = aml.LongReportingName,
+			am.client_id = aml.client_id,
+			am.broker_id = aml.broker_id,
+			am.base_curr = aml.base_curr,
+			am.status = aml.status,
+			am.ReportingNameType = aml.ReportingNameType,
+			am.group_account = aml.group_account,
+			am.lock_date = aml.lock_date,
+			am.handle_futures = aml.handle_futures,
+			am.account_type = aml.account_type,
+			am.error_limit = aml.error_limit,
+			am.reporting_name = aml.reporting_name,
+			am.reporting_path = aml.reporting_path,
+			am.broker_trade_acceptance_limit = aml.broker_trade_acceptance_limit,
+			am.hold_equity = aml.hold_equity,
+			am.disabled_on_date = aml.disabled_on_date,
+			am.real_broker_id = aml.real_broker_id,
+			am.MDMEntityTypeID = aml.MDMEntityTypeID,
+			am.broker_acc_no = aml.broker_acc_no,
+			am.pns_style = aml.pns_style,
+			am.default_accrual_source = aml.default_accrual_source,
+			am.interest_accrual_check_limit = aml.interest_accrual_check_limit,
+			am.dividend_accrual_check_limit = aml.dividend_accrual_check_limit,
+			am.FundStartDate = NULL,
+			am.AccountingEndDate = aml.AccountingEndDate,
+			am.MDMTopicEntityID = aml.MDMTopicEntityID,
+			am.MDMTradingBehaviour = aml.MDMTradingBehaviour,
+			am.MDMVersionNumber = aml.MDMVersionNumber,
+			am.MDMStartDate = aml.MDMStartDate,
+			am.MDMEndDate = aml.MDMEndDate,
+			am.version_date = aml.version_date,
+			am.version_source = aml.version_source,
+			am.MDMSlaPriority = aml.MDMSlaPriority,
+			am.CreateDate = aml.CreateDate,
+			am.EntityFlag = aml.EntityFlag,
+			am.FasLockDate = aml.FasLockDate
+		FROM account_master am
+		JOIN account_master_log aml ON am.acc_id = aml.acc_id
+		WHERE aml.BatchID = @BatchID AND aml.action = 'U';
+        END
+
+        -- INSERT (Restore Deleted)
+        INSERT INTO account_master (
+			acc_id,acc_name,acc_desc,ShortReportingName,LongReportingName,client_id,broker_id,base_curr,status,
+			ReportingNameType,group_account,lock_date,handle_futures,account_type,error_limit,reporting_name,
+			reporting_path,broker_trade_acceptance_limit,hold_equity,disabled_on_date,
+			real_broker_id,MDMEntityTypeID,broker_acc_no,
+			pns_style,default_accrual_source,interest_accrual_check_limit,
+			dividend_accrual_check_limit,FundStartDate,AccountingEndDate,MDMTopicEntityID,MDMTradingBehaviour,
+			MDMVersionNumber,MDMStartDate,MDMEndDate,version_date,version_source,MDMSlaPriority,
+			CreateDate,EntityFlag,FasLockDate,BatchID )
+            SELECT 
+			acc_id,acc_name,acc_desc,ShortReportingName,LongReportingName,client_id,broker_id,base_curr,status,
+			ReportingNameType,group_account,lock_date,handle_futures,account_type,error_limit,reporting_name,
+			reporting_path,broker_trade_acceptance_limit,hold_equity,disabled_on_date,
+			real_broker_id,MDMEntityTypeID,broker_acc_no,
+			pns_style,default_accrual_source,interest_accrual_check_limit,
+			dividend_accrual_check_limit,NULL,AccountingEndDate,MDMTopicEntityID,MDMTradingBehaviour,
+			MDMVersionNumber,MDMStartDate,MDMEndDate,version_date,version_source,MDMSlaPriority,
+			CreateDate,EntityFlag,FasLockDate,BatchID FROM account_master_log 
+            WHERE BatchID = @BatchID AND action = 'D';
+
+		 -- DELETE
+        IF EXISTS (SELECT 1 FROM account_master_log WITH (NOLOCK) WHERE BatchID = @BatchID AND action = 'I')
+        BEGIN
+            DELETE FROM account_master
+            WHERE acc_id IN (
+                SELECT acc_id FROM account_master_log WITH (NOLOCK) WHERE BatchID = @BatchID AND action = 'I'
+            );
+        END
