@@ -1,0 +1,893 @@
+CREATE   TRIGGER [dbo].[ManageAccountFundMappingLog]
+ON  [dbo].[account_fund_mapping]
+FOR INSERT, UPDATE, DELETE
+NOT FOR REPLICATION
+AS
+BEGIN
+
+	SET NOCOUNT ON
+
+	DECLARE @BatchID UNIQUEIDENTIFIER ;
+	SET @BatchID = CAST(CAST(CONTEXT_INFO() AS VARBINARY(16)) AS UNIQUEIDENTIFIER);
+	---------------------------------------------
+	--1. Extract the Reason of trigger calling --
+	---------------------------------------------
+	DECLARE	@delCount	INTEGER	=	0,
+		@insCount		INTEGER	=	0,
+		@action			CHAR(1),
+		@dbName			VARCHAR(60),				
+		@getFundStatusDataXML	XML,
+		@setFundStatusDataXML	XML,
+		@versionSource		VARCHAR(60)	=	LEFT(HOST_NAME(),30),
+		@versionDate		DATETIME	=	GETDATE(),
+		@jsonFundSignOff	NVARCHAR(MAX),		
+		@serverName				VARCHAR(60)	=	'',		
+		@remoteServerName		VARCHAR(60) =	'',
+		@linkedServer VARCHAR(60),
+		@i				INTEGER,
+		@databaseID		INTEGER,
+		@remoteTableName	VARCHAR(100),		
+		@queryString		NVARCHAR(MAX),
+		@parameterString	NVARCHAR(MAX),
+		@cntClient		INTEGER,
+		@retVal			INTEGER,
+		@qry			NVARCHAR(MAX),
+		@lotusFigureCheck	BIT,
+		@isLastAccountingDate BIT,
+		@jsonClients	NVARCHAR(MAX),
+		@PrimaryServerName				VARCHAR(MAX),
+		@SecondaryServerName				VARCHAR(MAX),
+		@ThirdServerName				VARCHAR(MAX)
+
+
+	CREATE TABLE #fundSignOff
+	(
+		ClientID		INTEGER,
+		BrokerID		INTEGER,
+		FundID			INTEGER,
+		FundName		UDTName,
+		SuggestedSignOffDate	DATE,
+		LastSignOffDate		DATE,
+		LastSignGivenBy		VARCHAR(30),
+		LastSignGivenOn		DATETIME2(2),
+		LastEndEquityDate	DATETIME2(2),
+		PendingPNSDate		DATE,
+		CriticalCheckDate	DATE,
+		LastAccountingDate	DATE,
+		IsMappingExists		TINYINT,
+		Comments		VARCHAR(255),
+		IsDefault		TINYINT
+	)
+
+	CREATE TABLE #clientDatabases
+	(
+		ID				INTEGER	IDENTITY(1,1),
+		ClientID		INTEGER,
+		DatabaseName	VARCHAR(60),
+		ServerName		VARCHAR(60)
+	)	
+
+
+	CREATE TABLE #clientDatabasesOnPrimaryServer
+	(
+		ID				INTEGER,
+		ClientID		INTEGER,
+		DatabaseName	VARCHAR(60),
+		ServerName		VARCHAR(60)
+	)
+
+	CREATE TABLE #clientDatabasesOnSecondaryServer
+	(
+		ID				INTEGER,
+		ClientID		INTEGER,
+		DatabaseName	VARCHAR(60),
+		ServerName		VARCHAR(60)
+	)
+
+	CREATE TABLE #clientDatabasesOnThirdServer
+	(
+		ID				INTEGER,
+		ClientID		INTEGER,
+		DatabaseName	VARCHAR(60),
+		ServerName		VARCHAR(60)
+	)
+
+
+	CREATE TABLE #fundSignOffStatusGetForManageAccountFundMappingLog
+	(
+		ClientID		INTEGER,
+		BrokerID		INTEGER,
+		FundID			INTEGER,
+		SignOffType		VARCHAR(20),
+		SignOffTillDate		DATE,
+		StartDate		DATE,
+		EndDate			DATE,
+		PendingPNSDate		DATE,
+		CriticalCheckDate	DATE,
+		IsSummaryConfigured	TINYINT,
+		LastAccountingDate	DATE,
+		CombinedReportingDate	DATE,
+		Comments		VARCHAR(255),
+		VersionDate		DATETIME,
+		VersionSource		VARCHAR(30)
+	) 
+
+	CREATE TABLE #fundSignOffStatusSetForManageAccountFundMappingLog
+	(
+		ClientID		INTEGER,
+		BrokerID		INTEGER,
+		FundID			INTEGER,
+		SignOffType		VARCHAR(20),
+		SignOffTillDate		DATE,
+		StartDate		DATE,
+		EndDate			DATE,
+		PendingPNSDate		DATE,
+		CriticalCheckDate	DATE,
+		IsSummaryConfigured	TINYINT,
+		LastAccountingDate	DATE,
+		CombinedReportingDate	DATE,
+		Comments		VARCHAR(255),
+		VersionDate		DATETIME,
+		VersionSource		VARCHAR(30),
+		IsDataModified		TINYINT,
+		Action			CHAR(1)
+	)
+
+	SELECT	@delCount = COUNT(*) FROM DELETED
+	SELECT	@insCount = COUNT(*) FROM INSERTED
+
+	--If Count in inserted and deleted is equal then UPDATE Query is executed
+	IF @delCount = @insCount
+	BEGIN
+		IF @insCount = 0
+			SET @action = ''
+		ELSE
+			SET @action = 'U'
+	END
+	--Else If count in Deleted table is zero then INSERT quary is executed
+	ELSE IF @delCount = 0
+		SET @action = 'I'
+	--otherwise DELETE query is executed
+	ELSE
+		SET @action = 'D'
+
+	-- If the broker account is being converted into group account then entry in FundSignOffStatus would be created
+	INSERT INTO #fundSignOff(ClientID,BrokerID,FundID,IsMappingExists)
+	SELECT	ClientID	=	MAX(ISNULL(I.client_id, D.client_id)),
+		BrokerID	=	MAX(ISNULL(I.broker_id, D.broker_id)),
+		FundID		=	ISNULL(I.fund_id, D.fund_id),
+		IsMappingExists	=	CASE WHEN MAX(I.acc_id) IS NOT NULL THEN 1 ELSE 0 END
+	FROM	INSERTED	I
+	FULL OUTER JOIN
+		DELETED		D
+	ON	I.acc_id	=	D.acc_id
+	AND	I.fund_id	=	D.fund_id
+	WHERE	I.acc_id	IS	NULL
+	OR	D.acc_id	IS	NULL
+	GROUP BY ISNULL(I.fund_id, D.fund_id)
+
+	UPDATE	A
+	SET	IsMappingExists	=	CASE WHEN AC.group_account = 'Y' THEN 2 ELSE 1 END
+	FROM	#fundSignOff		A
+	INNER JOIN
+		account_master		AC
+	ON	AC.acc_id	=	A.FundID
+	LEFT JOIN
+		account_fund_mapping	B
+	ON	A.FundID	=	B.fund_ID
+	WHERE	IsMappingExists	=	0
+	AND	(AC.group_account=	'Y'
+	OR	B.fund_id	IS	NOT NULL)
+
+
+	-------------------------------------------------------------
+	--  Get for fund sign off status data for different client.
+	-------------------------------------------------------------
+	IF EXISTS(SELECT TOP 1 1 FROM #fundSignOff WHERE FundID IS NOT NULL)
+	BEGIN
+		SET	@getFundStatusDataXML	=	(SELECT	ClientID = B.Client_id,FundID = A.FundID
+							FROM	#fundSignOff	A
+							INNER JOIN
+								Account_Master B WITH(NOLOCK)
+							ON	A.FundID	=	B.Acc_id
+							WHERE	FundID IS NOT NULL
+							GROUP BY B.Client_id,A.FundID
+							FOR XML PATH('dt'), TYPE, ROOT('ds'))
+
+
+		INSERT	#fundSignOffStatusGetForManageAccountFundMappingLog
+		EXEC	GetSignoffStatus	@clientFundIDsXML = @getFundStatusDataXML,@SignOffType = 'MAIN2CHECKS',@requireOutputInTempTable = 0
+
+		INSERT	#fundSignOffStatusSetForManageAccountFundMappingLog(ClientID,BrokerID,FundID,SignOffType,SignOffTillDate,StartDate,EndDate,
+			PendingPNSDate,CriticalCheckDate,IsSummaryConfigured,LastAccountingDate,CombinedReportingDate,Comments,VersionDate,
+			VersionSource)
+		SELECT	ClientID,BrokerID,FundID,SignOffType,SignOffTillDate,StartDate,EndDate,PendingPNSDate,CriticalCheckDate,IsSummaryConfigured,
+			LastAccountingDate,CombinedReportingDate,Comments,VersionDate,VersionSource
+		FROM	#fundSignOffStatusGetForManageAccountFundMappingLog
+
+		TRUNCATE TABLE #fundSignOffStatusGetForManageAccountFundMappingLog
+	END
+
+
+	UPDATE	FSS
+	SET	IsDataModified		=	1,
+		Action			=	'D'
+	FROM	#fundSignOffStatusSetForManageAccountFundMappingLog	FSS
+	INNER JOIN
+		#fundSignOff		I
+	ON	I.FundID		=	FSS.FundID
+	AND	FSS.SignOffType		=	'MAIN2CHECKS'
+	WHERE	IsMappingExists		=	0
+	AND	FSS.SignOffTillDate	=	'1/1/1900'
+
+	DELETE	#fundSignOff
+	WHERE	IsMappingExists		IN	(2,0) --2: no need to validate dates for group a/c
+
+	IF EXISTS (SELECT TOP 1 1 FROM	#fundSignOff)
+	BEGIN 
+		INSERT	#clientDatabases(ClientID,DatabaseName,ServerName)
+		SELECT	DISTINCT A.ClientID,DM.database_name,DM.server_name
+		FROM	#fundSignOff		A
+		INNER JOIN
+			client_database_master	CDM	WITH(NOLOCK)
+		ON	A.ClientID		=	CDM.client_id
+		AND	A.BrokerID		=	CDM.broker_id
+		INNER JOIN
+			database_master		DM	WITH(NOLOCK)
+		ON	CDM.database_id		=	DM.database_id
+		AND DM.IsActive = 1
+		AND DM.is_archival_database = 0
+
+			SET @PrimaryServerName = (SELECT TOP 1 RTRIM(LTRIM(VALUE)) FROM SystemInformation  WITH(NOLOCK) WHERE Type = 'PRIMARYSERVER')
+			SET @SecondaryServerName = (SELECT TOP 1 RTRIM(LTRIM(VALUE)) FROM SystemInformation  WITH(NOLOCK) WHERE Type = 'SECONDARYSERVER1')
+			SET @ThirdServerName = (SELECT TOP 1 RTRIM(LTRIM(VALUE)) FROM SystemInformation  WITH(NOLOCK) WHERE Type = 'ThirdServer')
+
+		--Extracting Remote Clients
+		INSERT #clientDatabasesOnPrimaryServer(ID, ClientID, DatabaseName, ServerName)
+		SELECT ID, ClientID, DatabaseName, ServerName
+		FROM   #clientDatabases
+		WHERE  RTRIM(LTRIM(ServerName)) = @PrimaryServerName
+
+		INSERT #clientDatabasesOnSecondaryServer(ID, ClientID, DatabaseName, ServerName)
+		SELECT ID, ClientID, DatabaseName, ServerName
+		FROM   #clientDatabases
+		WHERE  RTRIM(LTRIM(ServerName)) = @SecondaryServerName
+
+		INSERT #clientDatabasesOnThirdServer(ID, ClientID, DatabaseName, ServerName)
+		SELECT ID, ClientID, DatabaseName, ServerName
+		FROM   #clientDatabases
+		WHERE  RTRIM(LTRIM(ServerName)) = @ThirdServerName
+
+		IF(@@SERVERNAME = @PrimaryServerName)
+			BEGIN
+			SELECT	@cntClient	=	MAX(ID) FROM #clientDatabasesOnPrimaryServer
+			SET	@i		=	0
+
+		WHILE @i <  @cntClient
+		BEGIN			
+			
+			  SELECT @i = MIN(ID)
+				FROM #clientDatabasesOnPrimaryServer
+				WHERE ID > @i				
+			
+			SELECT	@dbName	=	D.Database_Name,@serverName = D.server_name,@databaseID = D.database_id
+			FROM	Client_Database_master	C
+			INNER JOIN
+				Database_Master		D
+			ON	C.Database_id	=	D.Database_id
+			AND	D.is_archival_database	= 0
+			INNER JOIN
+				#clientDatabasesOnPrimaryServer		CL
+			ON	CL.ClientID	=	C.client_id
+			AND	ID		=	@i		
+	
+			IF ISNULL(@dbName,'') <> ''
+			BEGIN		
+
+						SELECT @queryString  	=	N'EXEC @retVal = '+ @dbname + '.dbo.ValidateFundSignOffStatus @lotusFigureCheck = 0, @isLastAccountingDate = 1 ',
+							   @parameterString	= 	N'@retVal INT OUTPUT'
+
+					EXEC	sp_executesql		@queryString,
+												@parameterString,									
+												@retVal			= @retVal OUTPUT
+				
+					IF @retVal = -1
+					BEGIN
+						RAISERROR(50001,16,1,'Error in ValidateFundSignOffStatus')
+					END		
+				
+			END
+
+		END
+
+		IF EXISTS (SELECT TOP 1 1 FROM #clientDatabasesOnSecondaryServer)
+		BEGIN		
+
+		SET @linkedServer = (SELECT TOP 1 Value FROM SystemInformation WITH(NOLOCK) WHERE Type = 'SecondaryServer1')
+
+		SET @jsonFundSignOff = (SELECT	A.ClientID,	A.BrokerID,A.FundID,A.FundName,A.SuggestedSignOffDate,A.LastSignOffDate,A.LastSignGivenBy,	
+										A.LastSignGivenOn,A.LastEndEquityDate,A.PendingPNSDate,A.CriticalCheckDate,A.LastAccountingDate,
+										A.Comments,A.IsDefault
+								FROM #fundSignOff A	
+								INNER JOIN
+								#clientDatabasesOnSecondaryServer B
+								ON	A.ClientID	=	B.ClientID for json auto)															
+
+		SET @jsonClients=(SELECT A.ClientID FROM #clientDatabasesOnSecondaryServer A for json auto)
+		
+		--First delete data from temp table so that duplicate row not create
+		DELETE A
+		FROM #fundSignOff A
+		INNER JOIN
+			#clientDatabasesOnSecondaryServer B
+		ON A.ClientID = B.ClientID
+													
+
+		SELECT	@queryString		=	N'EXEC @retVal = ['+@linkedServer+'].Main2Masters.dbo.ValidateFundSignoffStatusForRemoteClients @LotusFigureCheck=@LotusFigureCheck,@jsonClients=@jsonClients,@isLastAccountingDate=@isLastAccountingDate, @jsonFundSignOff = @jsonFu
+
+
+
+n
+dSignOff,@remoteTableName =@remoteTableName OUTPUT',
+			    @parameterString	= 	N'@LotusFigureCheck BIT,@jsonClients NVARCHAR(MAX),@jsonFundSignOff NVARCHAR(MAX),@isLastAccountingDate TINYINT, @remoteTableName VARCHAR(100) OUTPUT,@retVal INT OUTPUT'
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@LotusFigureCheck	= @LotusFigureCheck,
+								@isLastAccountingDate=@isLastAccountingDate,
+								@jsonClients	=	@jsonClients,
+								@jsonFundSignOff	=	@jsonFundSignOff,
+								@retVal			= @retVal OUTPUT,
+								@remoteTableName	= @remoteTableName OUTPUT
+		
+		IF @retVal = -1
+		BEGIN
+			RAISERROR(50001,16,1,'Error in ValidateFundSignOffStatus')
+		END
+
+		--fill temp table with m2staging table 
+		SELECT @Qry = ''
+		SELECT @Qry =  N'INSERT INTO #fundSignOff(ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault)
+					SELECT ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault
+					FROM ['+@linkedServer+'].M2StagingMaster.dbo.['+@remoteTableName+'] with(nolock)
+		'
+
+		EXECUTE SP_EXECUTESQL @Qry, N'@linkedServer varchaR(60),@remoteTableName VARCHAR(MAX)',@linkedServer= @linkedServer,@remoteTableName=@remoteTableName
+
+		--drop table that has created on M2StaginMaster
+		SELECT @queryString = ''
+		SELECT	@queryString		=	N'EXEC  ['+@linkedServer+'].Main2Masters.dbo.DeleteRemoteStagingTable @remoteTableName = @remoteTableName',
+			@parameterString	= 	N'@remoteTableName VARCHAR(100)'
+
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@remoteTableName	= @remoteTableName 	
+
+		END
+
+		IF EXISTS (SELECT TOP 1 1 FROM #clientDatabasesOnThirdServer)
+		BEGIN		
+
+		SET @linkedServer = (SELECT TOP 1 Value FROM SystemInformation WITH(NOLOCK) WHERE Type = 'ThirdServer')
+
+		SET @jsonFundSignOff = (SELECT	A.ClientID,	A.BrokerID,A.FundID,A.FundName,A.SuggestedSignOffDate,A.LastSignOffDate,A.LastSignGivenBy,	
+										A.LastSignGivenOn,A.LastEndEquityDate,A.PendingPNSDate,A.CriticalCheckDate,A.LastAccountingDate,
+										A.Comments,A.IsDefault
+								FROM #fundSignOff A	
+								INNER JOIN
+								#clientDatabasesOnThirdServer B
+								ON	A.ClientID	=	B.ClientID for json auto)															
+
+		SET @jsonClients=(SELECT A.ClientID FROM #clientDatabasesOnThirdServer A for json auto)
+		
+		--First delete data from temp table so that duplicate row not create
+		DELETE A
+		FROM #fundSignOff A
+		INNER JOIN
+			#clientDatabasesOnThirdServer B
+		ON A.ClientID = B.ClientID
+													
+
+		SELECT	@queryString		=	N'EXEC @retVal = ['+@linkedServer+'].Main2Masters.dbo.ValidateFundSignoffStatusForRemoteClients @LotusFigureCheck=@LotusFigureCheck,@jsonClients=@jsonClients,@isLastAccountingDate=@isLastAccountingDate, @jsonFundSignOff = @jsonFun
+
+
+dSignOff,@remoteTableName =@remoteTableName OUTPUT',
+			    @parameterString	= 	N'@LotusFigureCheck BIT,@jsonClients NVARCHAR(MAX),@jsonFundSignOff NVARCHAR(MAX),@isLastAccountingDate TINYINT, @remoteTableName VARCHAR(100) OUTPUT,@retVal INT OUTPUT'
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@LotusFigureCheck	= @LotusFigureCheck,
+								@isLastAccountingDate=@isLastAccountingDate,
+								@jsonClients	=	@jsonClients,
+								@jsonFundSignOff	=	@jsonFundSignOff,
+								@retVal			= @retVal OUTPUT,
+								@remoteTableName	= @remoteTableName OUTPUT
+		
+		IF @retVal = -1
+		BEGIN
+			RAISERROR(50001,16,1,'Error in ValidateFundSignOffStatus')
+		END
+
+		--fill temp table with m2staging table 
+		SELECT @Qry = ''
+		SELECT @Qry =  N'INSERT INTO #fundSignOff(ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault)
+					SELECT ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault
+					FROM ['+@linkedServer+'].M2StagingMaster.dbo.['+@remoteTableName+'] with(nolock)
+		'
+
+		EXECUTE SP_EXECUTESQL @Qry, N'@linkedServer varchaR(60),@remoteTableName VARCHAR(MAX)',@linkedServer= @linkedServer,@remoteTableName=@remoteTableName
+
+		--drop table that has created on M2StaginMaster
+		SELECT @queryString = ''
+		SELECT	@queryString		=	N'EXEC  ['+@linkedServer+'].Main2Masters.dbo.DeleteRemoteStagingTable @remoteTableName = @remoteTableName',
+			@parameterString	= 	N'@remoteTableName VARCHAR(100)'
+
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@remoteTableName	= @remoteTableName 	
+
+		END
+		
+		END
+
+		IF(@@SERVERNAME = @SecondaryServerName)
+			BEGIN
+			SELECT	@cntClient	=	MAX(ID) FROM #clientDatabasesOnSecondaryServer
+			SET	@i		=	0
+
+		WHILE @i <  @cntClient
+		BEGIN			
+			
+			  SELECT @i = MIN(ID)
+				FROM #clientDatabasesOnSecondaryServer
+				WHERE ID > @i				
+			
+			SELECT	@dbName	=	D.Database_Name,@serverName = D.server_name,@databaseID = D.database_id
+			FROM	Client_Database_master	C
+			INNER JOIN
+				Database_Master		D
+			ON	C.Database_id	=	D.Database_id
+			AND	D.is_archival_database	= 0
+			INNER JOIN
+				#clientDatabasesOnSecondaryServer		CL
+			ON	CL.ClientID	=	C.client_id
+			AND	ID		=	@i		
+	
+			IF ISNULL(@dbName,'') <> ''
+			BEGIN		
+
+						SELECT @queryString  	=	N'EXEC @retVal = '+ @dbname + '.dbo.ValidateFundSignOffStatus @lotusFigureCheck = 0, @isLastAccountingDate = 1 ',
+							   @parameterString	= 	N'@retVal INT OUTPUT'
+
+					EXEC	sp_executesql		@queryString,
+												@parameterString,									
+												@retVal			= @retVal OUTPUT
+				
+					IF @retVal = -1
+					BEGIN
+						RAISERROR(50001,16,1,'Error in ValidateFundSignOffStatus')
+					END		
+				
+			END
+
+		END
+
+		IF EXISTS (SELECT TOP 1 1 FROM #clientDatabasesOnPrimaryServer)
+		BEGIN		
+
+		SET @linkedServer = (SELECT TOP 1 Value FROM SystemInformation WITH(NOLOCK) WHERE Type = 'PRIMARYSERVER')
+
+		SET @jsonFundSignOff = (SELECT	A.ClientID,	A.BrokerID,A.FundID,A.FundName,A.SuggestedSignOffDate,A.LastSignOffDate,A.LastSignGivenBy,	
+										A.LastSignGivenOn,A.LastEndEquityDate,A.PendingPNSDate,A.CriticalCheckDate,A.LastAccountingDate,
+										A.Comments,A.IsDefault
+								FROM #fundSignOff A	
+								INNER JOIN
+								#clientDatabasesOnPrimaryServer B
+								ON	A.ClientID	=	B.ClientID for json auto)															
+
+		SET @jsonClients=(SELECT A.ClientID FROM #clientDatabasesOnPrimaryServer A for json auto)
+		
+		--First delete data from temp table so that duplicate row not create
+		DELETE A
+		FROM #fundSignOff A
+		INNER JOIN
+			#clientDatabasesOnPrimaryServer B
+		ON A.ClientID = B.ClientID
+													
+
+		SELECT	@queryString		=	N'EXEC @retVal = ['+@linkedServer+'].Main2Masters.dbo.ValidateFundSignoffStatusForRemoteClients @LotusFigureCheck=@LotusFigureCheck,@jsonClients=@jsonClients,@isLastAccountingDate=@isLastAccountingDate, @jsonFundSignOff = @jsonFun
+
+
+dSignOff,@remoteTableName =@remoteTableName OUTPUT',
+			    @parameterString	= 	N'@LotusFigureCheck BIT,@jsonClients NVARCHAR(MAX),@jsonFundSignOff NVARCHAR(MAX),@isLastAccountingDate TINYINT, @remoteTableName VARCHAR(100) OUTPUT,@retVal INT OUTPUT'
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@LotusFigureCheck	= @LotusFigureCheck,
+								@isLastAccountingDate=@isLastAccountingDate,
+								@jsonClients	=	@jsonClients,
+								@jsonFundSignOff	=	@jsonFundSignOff,
+								@retVal			= @retVal OUTPUT,
+								@remoteTableName	= @remoteTableName OUTPUT
+		
+		IF @retVal = -1
+		BEGIN
+			RAISERROR(50001,16,1,'Error in ValidateFundSignOffStatus')
+		END
+
+		--fill temp table with m2staging table 
+		SELECT @Qry = ''
+		SELECT @Qry =  N'INSERT INTO #fundSignOff(ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault)
+					SELECT ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault
+					FROM ['+@linkedServer+'].M2StagingMaster.dbo.['+@remoteTableName+'] with(nolock)
+		'
+
+		EXECUTE SP_EXECUTESQL @Qry, N'@linkedServer varchaR(60),@remoteTableName VARCHAR(MAX)',@linkedServer= @linkedServer,@remoteTableName=@remoteTableName
+
+		--drop table that has created on M2StaginMaster
+		SELECT @queryString = ''
+		SELECT	@queryString		=	N'EXEC  ['+@linkedServer+'].Main2Masters.dbo.DeleteRemoteStagingTable @remoteTableName = @remoteTableName',
+			@parameterString	= 	N'@remoteTableName VARCHAR(100)'
+
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@remoteTableName	= @remoteTableName 	
+
+		END
+
+		IF EXISTS (SELECT TOP 1 1 FROM #clientDatabasesOnThirdServer)
+		BEGIN		
+
+		SET @linkedServer = (SELECT TOP 1 Value FROM SystemInformation WITH(NOLOCK) WHERE Type = 'ThirdServer')
+
+		SET @jsonFundSignOff = (SELECT	A.ClientID,	A.BrokerID,A.FundID,A.FundName,A.SuggestedSignOffDate,A.LastSignOffDate,A.LastSignGivenBy,	
+										A.LastSignGivenOn,A.LastEndEquityDate,A.PendingPNSDate,A.CriticalCheckDate,A.LastAccountingDate,
+										A.Comments,A.IsDefault
+								FROM #fundSignOff A	
+								INNER JOIN
+								#clientDatabasesOnThirdServer B
+								ON	A.ClientID	=	B.ClientID for json auto)															
+
+		SET @jsonClients=(SELECT A.ClientID FROM #clientDatabasesOnThirdServer A for json auto)
+		
+		--First delete data from temp table so that duplicate row not create
+		DELETE A
+		FROM #fundSignOff A
+		INNER JOIN
+			#clientDatabasesOnThirdServer B
+		ON A.ClientID = B.ClientID
+													
+
+		SELECT	@queryString		=	N'EXEC @retVal = ['+@linkedServer+'].Main2Masters.dbo.ValidateFundSignoffStatusForRemoteClients @LotusFigureCheck=@LotusFigureCheck,@jsonClients=@jsonClients,@isLastAccountingDate=@isLastAccountingDate, @jsonFundSignOff = @jsonFun
+
+
+dSignOff,@remoteTableName =@remoteTableName OUTPUT',
+			    @parameterString	= 	N'@LotusFigureCheck BIT,@jsonClients NVARCHAR(MAX),@jsonFundSignOff NVARCHAR(MAX),@isLastAccountingDate TINYINT, @remoteTableName VARCHAR(100) OUTPUT,@retVal INT OUTPUT'
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@LotusFigureCheck	= @LotusFigureCheck,
+								@isLastAccountingDate=@isLastAccountingDate,
+								@jsonClients	=	@jsonClients,
+								@jsonFundSignOff	=	@jsonFundSignOff,
+								@retVal			= @retVal OUTPUT,
+								@remoteTableName	= @remoteTableName OUTPUT
+		
+		IF @retVal = -1
+		BEGIN
+			RAISERROR(50001,16,1,'Error in ValidateFundSignOffStatus')
+		END
+
+		--fill temp table with m2staging table 
+		SELECT @Qry = ''
+		SELECT @Qry =  N'INSERT INTO #fundSignOff(ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault)
+					SELECT ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault
+					FROM ['+@linkedServer+'].M2StagingMaster.dbo.['+@remoteTableName+'] with(nolock)
+		'
+
+		EXECUTE SP_EXECUTESQL @Qry, N'@linkedServer varchaR(60),@remoteTableName VARCHAR(MAX)',@linkedServer= @linkedServer,@remoteTableName=@remoteTableName
+
+		--drop table that has created on M2StaginMaster
+		SELECT @queryString = ''
+		SELECT	@queryString		=	N'EXEC  ['+@linkedServer+'].Main2Masters.dbo.DeleteRemoteStagingTable @remoteTableName = @remoteTableName',
+			@parameterString	= 	N'@remoteTableName VARCHAR(100)'
+
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@remoteTableName	= @remoteTableName 	
+
+		END
+		
+		END
+
+		IF(@@SERVERNAME = @ThirdServerName)
+			BEGIN
+			SELECT	@cntClient	=	MAX(ID) FROM #clientDatabasesOnThirdServer
+			SET	@i		=	0
+
+		WHILE @i <  @cntClient
+		BEGIN			
+			
+			  SELECT @i = MIN(ID)
+				FROM #clientDatabasesOnThirdServer
+				WHERE ID > @i				
+			
+			SELECT	@dbName	=	D.Database_Name,@serverName = D.server_name,@databaseID = D.database_id
+			FROM	Client_Database_master	C
+			INNER JOIN
+				Database_Master		D
+			ON	C.Database_id	=	D.Database_id
+			AND	D.is_archival_database	= 0
+			INNER JOIN
+				#clientDatabasesOnThirdServer		CL
+			ON	CL.ClientID	=	C.client_id
+			AND	ID		=	@i		
+	
+			IF ISNULL(@dbName,'') <> ''
+			BEGIN		
+
+						SELECT @queryString  	=	N'EXEC @retVal = '+ @dbname + '.dbo.ValidateFundSignOffStatus @lotusFigureCheck = 0, @isLastAccountingDate = 1 ',
+							   @parameterString	= 	N'@retVal INT OUTPUT'
+
+					EXEC	sp_executesql		@queryString,
+												@parameterString,									
+												@retVal			= @retVal OUTPUT
+				
+					IF @retVal = -1
+					BEGIN
+						RAISERROR(50001,16,1,'Error in ValidateFundSignOffStatus')
+					END		
+				
+			END
+
+		END
+
+		IF EXISTS (SELECT TOP 1 1 FROM #clientDatabasesOnSecondaryServer)
+		BEGIN		
+
+		SET @linkedServer = (SELECT TOP 1 Value FROM SystemInformation WITH(NOLOCK) WHERE Type = 'SecondaryServer1')
+
+		SET @jsonFundSignOff = (SELECT	A.ClientID,	A.BrokerID,A.FundID,A.FundName,A.SuggestedSignOffDate,A.LastSignOffDate,A.LastSignGivenBy,	
+										A.LastSignGivenOn,A.LastEndEquityDate,A.PendingPNSDate,A.CriticalCheckDate,A.LastAccountingDate,
+										A.Comments,A.IsDefault
+								FROM #fundSignOff A	
+								INNER JOIN
+								#clientDatabasesOnSecondaryServer B
+								ON	A.ClientID	=	B.ClientID for json auto)															
+
+		SET @jsonClients=(SELECT A.ClientID FROM #clientDatabasesOnSecondaryServer A for json auto)
+		
+		--First delete data from temp table so that duplicate row not create
+		DELETE A
+		FROM #fundSignOff A
+		INNER JOIN
+			#clientDatabasesOnSecondaryServer B
+		ON A.ClientID = B.ClientID
+													
+
+		SELECT	@queryString		=	N'EXEC @retVal = ['+@linkedServer+'].Main2Masters.dbo.ValidateFundSignoffStatusForRemoteClients @LotusFigureCheck=@LotusFigureCheck,@jsonClients=@jsonClients,@isLastAccountingDate=@isLastAccountingDate, @jsonFundSignOff = @jsonFun
+
+
+dSignOff,@remoteTableName =@remoteTableName OUTPUT',
+			    @parameterString	= 	N'@LotusFigureCheck BIT,@jsonClients NVARCHAR(MAX),@jsonFundSignOff NVARCHAR(MAX),@isLastAccountingDate TINYINT, @remoteTableName VARCHAR(100) OUTPUT,@retVal INT OUTPUT'
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@LotusFigureCheck	= @LotusFigureCheck,
+								@isLastAccountingDate=@isLastAccountingDate,
+								@jsonClients	=	@jsonClients,
+								@jsonFundSignOff	=	@jsonFundSignOff,
+								@retVal			= @retVal OUTPUT,
+								@remoteTableName	= @remoteTableName OUTPUT
+		
+		IF @retVal = -1
+		BEGIN
+			RAISERROR(50001,16,1,'Error in ValidateFundSignOffStatus')
+		END
+
+		--fill temp table with m2staging table 
+		SELECT @Qry = ''
+		SELECT @Qry =  N'INSERT INTO #fundSignOff(ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault)
+					SELECT ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault
+					FROM ['+@linkedServer+'].M2StagingMaster.dbo.['+@remoteTableName+'] with(nolock)
+		'
+
+		EXECUTE SP_EXECUTESQL @Qry, N'@linkedServer varchaR(60),@remoteTableName VARCHAR(MAX)',@linkedServer= @linkedServer,@remoteTableName=@remoteTableName
+
+		--drop table that has created on M2StaginMaster
+		SELECT @queryString = ''
+		SELECT	@queryString		=	N'EXEC  ['+@linkedServer+'].Main2Masters.dbo.DeleteRemoteStagingTable @remoteTableName = @remoteTableName',
+			@parameterString	= 	N'@remoteTableName VARCHAR(100)'
+
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@remoteTableName	= @remoteTableName 	
+
+		END
+
+		IF EXISTS (SELECT TOP 1 1 FROM #clientDatabasesOnPrimaryServer)
+		BEGIN		
+
+		SET @linkedServer = (SELECT TOP 1 Value FROM SystemInformation WITH(NOLOCK) WHERE Type = 'PRIMARYSERVER')
+
+		SET @jsonFundSignOff = (SELECT	A.ClientID,	A.BrokerID,A.FundID,A.FundName,A.SuggestedSignOffDate,A.LastSignOffDate,A.LastSignGivenBy,	
+										A.LastSignGivenOn,A.LastEndEquityDate,A.PendingPNSDate,A.CriticalCheckDate,A.LastAccountingDate,
+										A.Comments,A.IsDefault
+								FROM #fundSignOff A	
+								INNER JOIN
+								#clientDatabasesOnPrimaryServer B
+								ON	A.ClientID	=	B.ClientID for json auto)															
+
+		SET @jsonClients=(SELECT A.ClientID FROM #clientDatabasesOnPrimaryServer A for json auto)
+		
+		--First delete data from temp table so that duplicate row not create
+		DELETE A
+		FROM #fundSignOff A
+		INNER JOIN
+			#clientDatabasesOnPrimaryServer B
+		ON A.ClientID = B.ClientID
+													
+
+		SELECT	@queryString		=	N'EXEC @retVal = ['+@linkedServer+'].Main2Masters.dbo.ValidateFundSignoffStatusForRemoteClients @LotusFigureCheck=@LotusFigureCheck,@jsonClients=@jsonClients,@isLastAccountingDate=@isLastAccountingDate, @jsonFundSignOff = @jsonFun
+
+
+dSignOff,@remoteTableName =@remoteTableName OUTPUT',
+			    @parameterString	= 	N'@LotusFigureCheck BIT,@jsonClients NVARCHAR(MAX),@jsonFundSignOff NVARCHAR(MAX),@isLastAccountingDate TINYINT, @remoteTableName VARCHAR(100) OUTPUT,@retVal INT OUTPUT'
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@LotusFigureCheck	= @LotusFigureCheck,
+								@isLastAccountingDate=@isLastAccountingDate,
+								@jsonClients	=	@jsonClients,
+								@jsonFundSignOff	=	@jsonFundSignOff,
+								@retVal			= @retVal OUTPUT,
+								@remoteTableName	= @remoteTableName OUTPUT
+		
+		IF @retVal = -1
+		BEGIN
+			RAISERROR(50001,16,1,'Error in ValidateFundSignOffStatus')
+		END
+
+		--fill temp table with m2staging table 
+		SELECT @Qry = ''
+		SELECT @Qry =  N'INSERT INTO #fundSignOff(ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault)
+					SELECT ClientID,BrokerID,FundID,FundName,SuggestedSignOffDate,LastSignOffDate,LastSignGivenBy,	
+						LastSignGivenOn,LastEndEquityDate,PendingPNSDate,CriticalCheckDate,LastAccountingDate,	
+						Comments,IsDefault
+					FROM ['+@linkedServer+'].M2StagingMaster.dbo.['+@remoteTableName+'] with(nolock)
+		'
+
+		EXECUTE SP_EXECUTESQL @Qry, N'@linkedServer varchaR(60),@remoteTableName VARCHAR(MAX)',@linkedServer= @linkedServer,@remoteTableName=@remoteTableName
+
+		--drop table that has created on M2StaginMaster
+		SELECT @queryString = ''
+		SELECT	@queryString		=	N'EXEC  ['+@linkedServer+'].Main2Masters.dbo.DeleteRemoteStagingTable @remoteTableName = @remoteTableName',
+			@parameterString	= 	N'@remoteTableName VARCHAR(100)'
+
+
+		EXEC	sp_executesql	@queryString,
+								@parameterString,
+								@remoteTableName	= @remoteTableName 	
+
+		END
+		
+		END
+
+
+		UPDATE	FS
+		SET	PendingPNSDate		=	TFS.PendingPNSDate,
+			CriticalCheckDate	=	TFS.CriticalCheckDate,
+			LastAccountingDate	=	TFS.LastAccountingDate,
+			IsDataModified		=	1,
+			Action			=	'U'
+		FROM	#fundSignOffStatusSetForManageAccountFundMappingLog	FS
+		INNER JOIN
+			#fundSignOff		TFS
+		ON	FS.FundID	=	TFS.FundID
+		AND	FS.SignOffType	=	'MAIN2CHECKS'
+		AND	(ISNULL(FS.PendingPNSDate, '1/1/1900')		!=	ISNULL(TFS.PendingPNSDate, '1/1/1900')
+		OR	ISNULL(FS.CriticalCheckDate, '1/1/1900')	!=	ISNULL(TFS.CriticalCheckDate, '1/1/1900')
+		OR	ISNULL(FS.LastAccountingDate, '1/1/1900')	!=	ISNULL(TFS.LastAccountingDate, '1/1/1900'))
+		WHERE	ISNULL(FS.Action,'')	!=	'D'
+
+
+		INSERT	#fundSignOffStatusSetForManageAccountFundMappingLog(ClientID,BrokerID,FundID,SignOffType,SignOffTillDate,PendingPNSDate,CriticalCheckDate,
+			LastAccountingDate,Comments,VersionDate,VersionSource,IsDataModified,Action)
+		SELECT	A.ClientID,A.BrokerID,A.FundID,'MAIN2CHECKS','1/1/1900',A.PendingPNSDate,A.CriticalCheckDate,A.LastAccountingDate,
+			'',@versionDate,@versionSource,1,'I'
+		FROM	#fundSignOff		A
+		LEFT JOIN
+		(
+			SELECT	DISTINCT
+				FundID
+			FROM	#fundSignOffStatusSetForManageAccountFundMappingLog	A
+			WHERE	ISNULL(Action,'')	!=	'D'
+		)	FS
+		ON	FS.FundID	=	A.FundID
+		WHERE	FS.FundID	IS	NULL
+
+
+		----------------------------------------------------------------------
+		--  FundSignOffStatus table data updation on respective clients.
+		----------------------------------------------------------------------
+		IF EXISTS(SELECT TOP 1 1 FROM #fundSignOffStatusSetForManageAccountFundMappingLog WHERE IsDataModified = 1)
+		BEGIN
+			SET @setFundStatusDataXML =	(SELECT	ClientID,BrokerID,FundID,SignOffType,SignOffTillDate,StartDate,EndDate,
+									PendingPNSDate,CriticalCheckDate,IsSummaryConfigured,LastAccountingDate,
+									CombinedReportingDate,Comments,Action
+								FROM	#fundSignOffStatusSetForManageAccountFundMappingLog	A
+								WHERE	IsDataModified = 1
+								FOR XML PATH('dtFundSignOff'), TYPE, ROOT('dsFundSignOff'))
+
+			EXEC	SetFundSignOffStatusData @setFundStatusDataXML,@versionSource	
+		END
+
+
+	END 
+
+	-----------------------------------------
+	--2. Insert data in AccountFundMappingLog
+	-----------------------------------------
+	IF @action IN('I')
+	BEGIN
+		INSERT	AccountFundMappingLog (Action,AccountFundMappingID,ClientID,BrokerID,AccountID,FundID,VersionDate,VersionSource,LogDate,EntityRelationshipID,BatchID)
+		SELECT	Action		=	@action,
+			AccountFundMappingID,
+			client_id,	
+			broker_id,
+			acc_id,
+			fund_id,
+			VersionDate,	
+			VersionSource,
+			LogDate			=	GETDATE(),
+			EntityRelationshipID	=	EntityRelationshipID,
+			@BatchID
+		FROM	INSERTED	I
+
+	END
+	ELSE IF @action IN('D','U')
+	BEGIN
+		INSERT	AccountFundMappingLog (Action,AccountFundMappingID,ClientID,BrokerID,AccountID,FundID,VersionDate,VersionSource,LogDate,EntityRelationshipID,BatchID)
+		SELECT	Action		=	@action,
+			AccountFundMappingID,
+			client_id,	
+			broker_id,
+			acc_id,
+			fund_id,
+			VersionDate,	
+			VersionSource,
+			LogDate			=	GETDATE(),
+			EntityRelationshipID	=	EntityRelationshipID,
+			@BatchID
+		FROM	DELETED		D
+
+	END	
+
+END
