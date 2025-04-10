@@ -1,0 +1,10 @@
+DELETE E              
+    FROM Main2Masters.mdm.Entities  E              
+    INNER JOIN              
+     #accountMaster    A              
+    ON E.EntityID   = A.MDMTopicEntityID              
+    WHERE A.Action   = 'I'              
+    AND A.MDMTopicEntityID IS NOT NULL      
+
+DELETE FROM mdm.Entities WHERE EntityID IN (Select MDMTopicEntityID From account_master)
+                                                                
