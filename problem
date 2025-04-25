@@ -1,0 +1,6 @@
+System not standing accrual of dividend on reversal of already paid dividend.
+
+UBS pays dividend on ex-date itself in case of Equity Swaps. If these dividends were paid on estimated basis, then on later date UBS reinstates (cancels old dividend and books new dividend by cancelling old cash and flowing updated cash).
+In the given IDs, broker reinstated dividend cash flow on 04/15/2025, but since we had old rate updated in system, we booked only dividend cancelled cash client side and kept updated dividend cash as pending.
+
+Position window should show accrual again on booking of above-mentioned cancelled cash on 04/15/2025, but system showing no accrual
