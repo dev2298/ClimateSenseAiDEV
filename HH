@@ -1,0 +1,29 @@
+public ActionResult Post(Parameter parameter)
+
+        {
+            var endpoint = Request.Host.ToString() + Request.Path;
+            DBExchangeManager dBExchangeManager = null;
+
+            try
+            {
+                parameter.ConnectionString = parameter.ConnectionString.Replace("||", @"\");
+                dBExchangeManager = new DBExchangeManager(parameter.ConnectionString, parameter.ClientID, parameter.ReportDate, parameter.XmlString, _configuration, Environment.CurrentDirectory + " URL: " + endpoint, parameter.IsLive, parameter.PreReportDate,parameter.primaryOperationID);
+                var exchangeManager = dBExchangeManager.Get();
+                exchangeManager.Process();
+                if (dBExchangeManager.isWeightedCost)
+                {
+                    dBExchangeManager.UpdateExchangeRate();
+                }
+                dBExchangeManager.Save();
+            }
+            catch (Exception ex)
+            {
+                _klogger = Logger.Instance;
+                _klogger.LogErrorMessage(parameter.ClientID, ex.ToString(), "Error in currency exchange Post.", dBExchangeManager.primaryOperationId, Guid.NewGuid(), parameter.ReportDate, 1, 1, "CurrencyExchangeService", Environment.CurrentDirectory + " URL: " + endpoint);
+
+                _logger.LogError(ex, "Error in CurrencyExchangeService ");
+                return BadRequest(ex.Message);
+
+            }
+            return Ok();
+        }
