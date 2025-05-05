@@ -1,0 +1,3 @@
+In Cash Window , for Currency Module Applicable fund, System is booking auto tax lot movement even when the To and From account is same.
+
+In such case since the currency is not moving from one account to another , there should not be any tax lot movement. This leads to Dummy realized gain loss in the fund which is not correct.
