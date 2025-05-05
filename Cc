@@ -1,0 +1,381 @@
+using Microsoft.Extensions.Configuration;
+using NAV.M2.ExchangeFacilitated;
+using NAV.M2Core;
+using NAV.M2CurrencyExch.Data.StoreProcedures;
+using NAV.M2Entity;
+using NAV.MasterServiceClient;
+using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using static NAV.M2CurrencyExch.Data.StoreProcedures.CheckConfiguration;
+
+namespace NAV.M2CurrencyExch.Data
+{
+
+    public class DBExchangeManager
+    {
+        string connection;
+        int clientID;
+        DateTime reportDate;
+        string xmlString;
+        ExchangeManager mgr;
+        Int16 isLive;
+        DateTime preReportDate;
+        public Guid primaryOperationId;
+        Guid operationId;
+        Logger _logger;
+        string instanceIdentifier;
+        public bool isWeightedCost;
+        public static string CURRENCYEXCHANGESERVICE = "CurrencyExchangeService";
+        public EntityConfigClient entityConfigClient = null;
+        public CurrencyServiceClient currencyServiceClient = null;
+        const string CONST_WEIGHTEDEXCHANGERATE = "WEIGHTED EXCHANGE RATE";
+        public DBExchangeManager(string connection, int clientID, DateTime reportDate, string xmlString, IConfiguration configuration, string instanceIdentifier, Int16 isLive, DateTime preReportDate,Guid primaryOperationID=default)
+        {
+            this.connection = connection;
+            this.clientID = clientID;
+            this.reportDate = reportDate;
+            this.xmlString = xmlString;
+            Logger._configuration = configuration;
+            EFLogger._configuration = configuration;
+            this._logger = Logger.Instance;
+            this.instanceIdentifier = instanceIdentifier;
+            this.isLive = isLive;
+            this.preReportDate = preReportDate;
+            string masterAPIEndpoint = configuration.GetSection("Appsetting").GetSection("Main2MastersApiEndPoint").Value;
+            entityConfigClient = new EntityConfigClient(masterAPIEndpoint);
+            currencyServiceClient = new CurrencyServiceClient(masterAPIEndpoint);
+            primaryOperationId = primaryOperationID!=Guid.Empty?primaryOperationID:Guid.NewGuid();
+        }
+
+        public ExchangeManager Get()
+        {
+            if (mgr == null)
+            {
+                var startDateTime = DateTime.UtcNow;
+                operationId = Guid.NewGuid();
+                var exchangeConfigs = GetConfiguration();
+                var impairment = BookImpairment();
+                isWeightedCost = exchangeConfigs.Any(s => s.EntityProcessConfigType == CONST_WEIGHTEDEXCHANGERATE);
+                var exchangeFacilitated = exchangeConfigs.Any(s => s.EntityProcessConfigType == FacilitatedDbManager.CONST_ORDERANDHEDGE ||
+                              s.EntityProcessConfigType == FacilitatedDbManager.CONST_PROPLEDGER);
+                DeleteImpairment();
+                if (exchangeFacilitated)
+                {
+                    string exchangeMethod = string.Empty;
+                    if (exchangeConfigs.Any(s => s.EntityProcessConfigType == FacilitatedDbManager.CONST_ORDERANDHEDGE))
+                    {
+                        exchangeMethod = FacilitatedDbManager.CONST_ORDERANDHEDGE;
+                    }
+                    else
+                    {
+                        exchangeMethod = FacilitatedDbManager.CONST_PROPLEDGER;
+                    }
+
+                    FacilitatedDbManager facilitatedDbManager = new FacilitatedDbManager(connection, clientID, reportDate, xmlString, instanceIdentifier, exchangeMethod);
+
+                    if (facilitatedDbManager.Delete() == -1)
+                    {
+                        throw new Exception("Error in delete Fmv cashes");
+                    }
+
+                    facilitatedDbManager.Get();
+                    if (facilitatedDbManager.Save() == -1)
+                    {
+                        throw new Exception("Error in save FMV cashes");
+                    }
+                }
+
+                if (impairment)
+                {
+                    ExecuteCashStatus();
+                    mgr.Process();
+                    Save();
+                    FacilitatedDbManager facilitatedDbManager = new FacilitatedDbManager(connection, clientID, reportDate, xmlString, instanceIdentifier, FacilitatedDbManager.CONST_IMPAIRMENT);
+                    facilitatedDbManager.Get();
+                    if (facilitatedDbManager.Save() == -1)
+                    {
+                        throw new Exception("Error in save Imapairment");
+                    }
+                }
+
+                ExecuteCashStatus();
+                _logger.LogTraceMessage(clientID, primaryOperationId, operationId, 1, reportDate, "Cash Status Get", string.Empty, startDateTime, DateTime.UtcNow, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+            }
+            return mgr;
+        }
+
+        private void ExecuteCashStatus()
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            lock (locks.GetSyncObject(clientID))
+            {
+                DeleteCurrencyExchange deleteCashTradeStatus = new DeleteCurrencyExchange(connection, clientID, reportDate, xmlString, isLive > 0);
+                deleteCashTradeStatus.ExecuteNonQuery();
+                if (deleteCashTradeStatus.returnValue == -1)
+                {
+                    _logger.LogErrorMessage(clientID, "Error in deleting cash trade status.", "Error in deleting cash trade status.", primaryOperationId, operationId, reportDate, 2, 1, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+                    throw new Exception("Error in delete cash trade status");
+                }
+            }
+            _logger.LogTraceMessage(clientID, primaryOperationId, operationId, 1, reportDate, "Cash Status Delete", string.Empty, startDateTime, DateTime.UtcNow, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+
+            var cashTradePostionRepository = new CashTradePostionRepository();
+            var isDecoupled = entityConfigClient.IsDecoupledMasterApplicable(clientID);
+            //var isDecoupled = false;
+            var spName = isDecoupled ? "FetchCurrencyExchangeDetail" : "GetCurrencyExchangeDetail";
+
+            startDateTime = DateTime.UtcNow;
+            GetCurrencyExchangeDetail getTradeCashDetail = new GetCurrencyExchangeDetail(cashTradePostionRepository, connection, reportDate, clientID, xmlString, isLive, preReportDate, spName);
+            getTradeCashDetail.ExecuteDataSet();
+
+            if (isDecoupled)
+            {
+                FillData(cashTradePostionRepository, clientID);
+            }
+
+            EntityRepository<ExchangeRate, int> exchangeRateRepository = new EntityRepository<ExchangeRate, int>((s) => s.CurrID);
+            GetExchangeRates getExchangeRates = new GetExchangeRates(exchangeRateRepository, connection, reportDate, clientID, isLive > 0);
+            getExchangeRates.ExecuteDataSet();
+
+            _logger.LogTraceMessage(clientID, primaryOperationId, operationId, 1, reportDate, "Cash Status Get", string.Empty, startDateTime, DateTime.UtcNow, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+
+
+            mgr = new ExchangeManager(exchangeRateRepository, cashTradePostionRepository, isLive > 0);
+            mgr.instanceIdentifier = this.instanceIdentifier;
+            mgr.primaryOperationId = primaryOperationId;
+            mgr.clientId = clientID;
+            mgr.reportDate = reportDate;
+        }
+
+        public int UpdateExchangeRate()
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+            try
+            {
+                UpdateExchangeRates updateExchangeRates = new UpdateExchangeRates(connection, clientID, reportDate);
+                updateExchangeRates.BulkInsert(false, mgr.cashTradeStatuses.Where(s => s.ID2 == null).ToList());
+                _logger.LogTraceMessage(clientID, primaryOperationId, operationId, 1, reportDate, "Update Exchange Rates", "", startDateTime, DateTime.UtcNow, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+                if (updateExchangeRates.returnValue == -1)
+                {
+                    _logger.LogErrorMessage(clientID, "UpdateExchangeRate.", "Error in saving weighted avg exchange rate.", primaryOperationId, operationId, reportDate, 2, 1, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+                    throw new Exception("There in some problem in saving weighted avg exchange rate.");
+                }
+
+                EntityRepository<ExchangeRate, int> exchangeRateRepository = new EntityRepository<ExchangeRate, int>((s) => s.CurrID);
+                GetExchangeRates getExchangeRates = new GetExchangeRates(exchangeRateRepository, connection, reportDate, clientID, isLive > 0);
+                getExchangeRates.ExecuteDataSet();
+
+                foreach (var item in mgr.cashTradeStatuses)
+                {
+                    if (exchangeRateRepository.DataMap.ContainsKey(item.CurrencyID))
+                    {
+                        {
+                            var exchRate = exchangeRateRepository.DataMap[item.CurrencyID].ExchRate;
+                            if (!item.ID1ExchRateOverridden)
+                            {
+                                item.ExchangeRate1 = exchRate;
+                            }
+                            if (!item.ID2ExchRateOverridden || item.ID2 == null)
+                            {
+                                item.ExchangeRate2 = exchRate;
+                            }
+                        }
+                    }
+                    item.Gain = (item.ExchangeRate2 - item.ExchangeRate1) * item.Amount;
+
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogErrorMessage(clientID, ex.Message, "UpdateExchangeRate", primaryOperationId, operationId, reportDate, 2, 1, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+                return -1;
+            }
+            return 0;
+        }
+        private List<ExchangeConfiguration> GetConfiguration()
+        {
+            CheckConfiguration checkConfiguration = new CheckConfiguration(connection, clientID, reportDate);
+            checkConfiguration.ExecuteDataSet();
+            return checkConfiguration.configurations;
+
+        }
+        private bool BookImpairment()
+        {
+            CheckImpairment checkConfiguration = new CheckImpairment(connection, clientID, reportDate);
+            checkConfiguration.ExecuteNonQuery();
+            return checkConfiguration.returnValue == 1;
+
+        }
+
+        public int Save()
+        {
+            var startDateTime = DateTime.UtcNow;
+            if (mgr.cashTradeStatuses.Count == 0)
+                return 0;
+            lock (locks.GetSyncObject(clientID))
+            {
+                SaveCurrencyExchange saveCashExchange = new SaveCurrencyExchange(connection, clientID, reportDate, isLive > 0);
+                saveCashExchange.BulkInsert(false, mgr.cashTradeStatuses, mgr.newCashes, mgr.cashTransferMappings);
+                if (saveCashExchange.returnValue != 0)
+                {
+                    _logger.LogErrorMessage(clientID, "Error in saving currency exchange details.", "Error in saving currency exchange details.", primaryOperationId, operationId, reportDate, 2, 1, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+                    throw new Exception("There in some problem in saving cash exchange details.");
+                }
+                else
+                {
+                    _logger.LogTraceMessage(clientID, primaryOperationId, Guid.NewGuid(), 1, reportDate, "Cash Status Save", string.Empty, startDateTime, DateTime.UtcNow, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+                }
+            }
+            return 0;
+        }
+
+        private void FillData(CashTradePostionRepository cashTradePostionRepository, int clientId)
+        {
+            var entities = entityConfigClient.GetSystemConfigurationData(clientId.ToString(), "ExactSortApplicable");
+            var currenciesData = currencyServiceClient.GetCurrencyMasterData(string.Join(",", cashTradePostionRepository.Data.Select(x => x.CurrID).Distinct()));
+            var exactSortApplicable = entities.FirstOrDefault(s => s.Type == "ExactSortApplicable" && s.Name == "CurrencyExchangeService");
+            var exactSortApplicablevalue = exactSortApplicable != null ? Convert.ToBoolean(exactSortApplicable.Value) : false;
+
+            (from a in cashTradePostionRepository.Data
+             join b in currenciesData
+             on a.CurrID equals b.curr_id
+             select new { a, b }).ToList().ForEach(e =>
+             {
+                 e.a.CurrName = e.b.curr_name;
+                 e.a.ExactSortApplicable = exactSortApplicablevalue;
+             });
+        }
+        private int DeleteImpairment()
+        {
+            operationId = Guid.NewGuid();
+            var startDateTime = DateTime.UtcNow;
+            try
+            {
+                DeleteImapairmentCash deleteImapairmentCash = new DeleteImapairmentCash(connection, clientID, reportDate, xmlString);
+                deleteImapairmentCash.ExecuteNonQuery();
+                _logger.LogTraceMessage(clientID, primaryOperationId, operationId, 1, reportDate, "exchange facilitated Delete DeleteImapairmentCash", string.Empty, startDateTime, DateTime.UtcNow, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+                return deleteImapairmentCash.returnValue;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogErrorMessage(clientID, ex.Message, "exchange facilitated DeleteImapairmentCash", primaryOperationId, operationId, reportDate, 2, 1, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+                return -1;
+            }
+
+        }
+    }
+
+    public class ExchangeManager
+    {
+        EntityRepository<ExchangeRate, int> exchangeRateRepository;
+        CashTradePostionRepository cashTradePostionRepository;
+        public List<Cash> newCashes = new List<Cash>();
+        public List<CashTransferMapping> cashTransferMappings = new List<CashTransferMapping>();
+        public List<CashTradeStatus> cashTradeStatuses = new List<CashTradeStatus>();
+        public string instanceIdentifier = string.Empty;
+        public Guid primaryOperationId;
+        public int clientId = 0;
+        public DateTime reportDate = DateTime.UtcNow;
+        Guid operationId;
+        Logger _logger;
+        private bool isLive;
+        public static string CURRENCYEXCHANGESERVICE = "CurrencyExchangeService";
+
+        public ExchangeManager(EntityRepository<ExchangeRate, int> exchangeRateRepository, CashTradePostionRepository cashTradePostionRepository, bool isLive)
+        {
+            this.exchangeRateRepository = exchangeRateRepository;
+            this.cashTradePostionRepository = cashTradePostionRepository;
+            this.isLive = isLive;
+            this._logger = Logger.Instance;
+        }
+        public void Process()
+        {
+            int newCashID = 0;
+
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+            List<ThresholdTransfer> thresholdTransfers = new List<ThresholdTransfer>();
+            cashTradePostionRepository.OptimizeTransferList(ref thresholdTransfers);
+
+            if (cashTradePostionRepository.Data.Any() && cashTradePostionRepository.Data.FirstOrDefault().PnsType == EnumPns.PnsType.AVGCOST)
+            {
+                cashTradePostionRepository.UpdateAvgCost();
+            }
+            ProcessCashTransfer(cashTradePostionRepository.transferCashList.Where(s => !s.isWithinThreshold).ToList(), ref newCashID);
+            if (cashTradePostionRepository.transferCashList.Any(s => !s.IsDisable && !s.isWithinThreshold))
+            {
+                ProcessCashTransfer(cashTradePostionRepository.transferCashList.Where(s => !s.isWithinThreshold && !s.IsDisable).ToList(), ref newCashID);
+            }
+            if (thresholdTransfers.Any())
+            {
+                TransferListWithInLimit(ref newCashID, thresholdTransfers);
+            }
+            cashTradePostionRepository.AddNonDisableTransferCash();
+            cashTradeStatuses = cashTradePostionRepository.GeneratePairPostions(exchangeRateRepository.DataMap, isLive);
+            var customdeatils = new { newCashID = newCashID };
+            var jcustomdeatils = JsonConvert.SerializeObject(customdeatils);
+
+            _logger.LogTraceMessage(this.clientId, primaryOperationId, operationId, 1, reportDate, "Process Currency Exchange Data", jcustomdeatils, startDateTime, DateTime.UtcNow, CURRENCYEXCHANGESERVICE, this.instanceIdentifier);
+        }
+
+        private bool ProcessCashTransfer(List<CashTradePostion> transferCashList, ref int newCashID)
+        {
+            bool isTransfer = false;
+            List<CashTradePostion> NewcashTradePostions = new List<CashTradePostion>();
+            Transfer transfer = new Transfer(transferCashList
+                                , cashTradePostionRepository.cashTradePostions);
+            newCashes.AddRange(transfer.Process(NewcashTradePostions, ref newCashID));
+            cashTransferMappings.AddRange(transfer.cashTransferMappings);
+            foreach (var item in NewcashTradePostions)
+            {
+                isTransfer = true;
+                cashTradePostionRepository.AddInDictionary(item);
+            }
+            return isTransfer;
+        }
+        private void TransferListWithInLimit(ref int newCashID, List<ThresholdTransfer> transferEligibleCash)
+        {
+            foreach (var item in transferEligibleCash.OrderBy(s => s.Variance).ThenBy(s => s.Id1.AccountID))
+            {
+                double diff = item.Id1.Amount + item.Id2.Amount;
+                if (Math.Sign(diff) == Math.Sign(item.Id1.Amount))
+                {
+                    item.Id1.Amount -= diff;
+                    item.Id1.diffAmt = diff;
+                }
+                else
+                {
+                    item.Id2.Amount -= diff;
+                    item.Id2.diffAmt = diff;
+                }
+                List<CashTradePostion> transferCashList = new List<CashTradePostion>();
+                transferCashList.Add(item.Id1);
+                transferCashList.Add(item.Id2);
+                if (ProcessCashTransfer(transferCashList, ref newCashID))
+                {
+                    newCashID -= 1;
+                    // add diffrence b08 cash
+                    if (item.Id1.diffAmt != 0)
+                    {
+                        newCashes.Add(new Cash(item.Id1, newCashID));
+                    }
+                    else
+                    {
+                        newCashes.Add(new Cash(item.Id2, newCashID));
+                    }
+                }
+                else
+                {
+                    //  remove diffrence
+                    item.Id2.Amount += item.Id2.diffAmt;
+                    item.Id1.Amount += item.Id1.diffAmt;
+                }
+            }
+        }
+    }
+}
