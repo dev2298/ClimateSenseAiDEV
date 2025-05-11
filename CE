@@ -1,0 +1,1783 @@
+using NAV.Common.Data;
+using NAV.Common.Extensions;
+using NAV.Common.Logging;
+using NAV.Common.Utilities;
+using NAV.Communication;
+using NAV.PNL.Data;
+using NAV.PNL.Data.Common;
+using NAV.PNL.DataAccess;
+using NAV.PNL.DataAccess.Get;
+using NAV.PNL.DataAccess.Set;
+using NAV.PNL.PNS;
+using NAVPNL.Mapper;
+using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
+using System.Configuration;
+using System.Linq;
+using System.Net.Http;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Xml.Serialization;
+using System.Xml.Linq;
+using NAVBO.BusinessObjects.Pns;
+using System.Collections.Concurrent;
+using NAV.MasterServiceClient;
+using NAV.MasterServiceBusinessObjects.Filters;
+using ProductData = NAV.PNL.Data.Common.ProductData;
+using NAVCOMMONMODULES.NAVBO;
+using NAV.Common.Infrastructure;
+
+namespace NAV.PNL
+{
+    public class Pnl
+    {
+        public static HashSet<int> golbalAccountCache = new HashSet<int>();
+        public static object accountLock = new object();
+        private RequestParameters requestParameters;
+        private DateTime toDate;
+        private DateTime fromDate;
+        private string accIDs;
+        private string accountsNeedToBeExecuted;
+        private string prodIDs;
+        private int? currID;
+        private PnlRepository pnlRepository;
+        public static object objLock = new object();
+        private PnlStorage pnlStorage;
+        private ILogger logger = Log4NetService.Instance.GetLogger("Pnl");
+        private int prodIdCount = 0;
+        private int accIdCount = 0;
+        string logFolderName;
+        TaskQueue checksQueue = new TaskQueue();
+        TaskQueue RORQueue = new TaskQueue();
+
+        static CommonLog commonLog = CommonLog.Instance;
+        private ConcurrentDictionary<ConcurrentDictionary<DateTime, int>, int> lstOfProdIdsWithReportdate;
+        private int monthFinancialYearStartsOn;
+        private DateTime yearEndDate;
+        //  static CommonLog ScopedCommonLog = new CommonLog();
+        public static bool ChecksOnService = Convert.ToBoolean(ConfigurationManager.AppSettings["ChecksOnService"]);
+        public static bool IsRORModuleApplicable = Convert.ToBoolean(ConfigurationManager.AppSettings["IsRORModuleApplicable"]);
+        public static string ClientIDsToBeExcludedForFactoredTradeService = Convert.ToString(ConfigurationManager.AppSettings["ClientIDsToExcludeForFactoredTradeService"]);
+
+        public ConcurrentBag<AffectedItemsForAutoSettleError> cbAutoSettleErrorProcessAccounts = new ConcurrentBag<AffectedItemsForAutoSettleError>();
+        public ConcurrentBag<AffectedAccountsForCostSourceSetPriceUpdate> colAffectedAccounts = new ConcurrentBag<AffectedAccountsForCostSourceSetPriceUpdate>();
+        Guid primaryOperationID = Guid.NewGuid();
+        public static string PNLSERVICE = "PNL Service";
+        private const string INTERESTSLMCONFIG = "INTEREST-SLM-TRADE,INTEREST-SLM-CASH";
+        private const string SERVICEURL = "ServiceURL";
+        private const string INTERESTSLMSERVICEURL = "InterestSLMService";
+        private const string LOANINTERESTSERVICEURL = "LoanInterestService";
+        private const string CORPORATEACTIONSERVICEURL = "CorporateActionService";
+        private const string CURRENCYEXCHANGESERVICEURL = "CurrencyExchangeService";
+        private IEnumerable<NAV.MasterServiceBusinessObjects.SystemInformation> serviceUrlsFromSystemInfo = new List<NAV.MasterServiceBusinessObjects.SystemInformation>();
+        private EntityConfigClient entityConfigClient = null;
+        private bool isDecoupledMasterApplicable = false;
+        DateTime requestStartTime;
+        DateTime overallProcessTime;
+        public Pnl()
+        {
+            entityConfigClient = new EntityConfigClient(ApplicationConfig.Main2MastersAPIURL);
+        }
+
+        public ResponseMsg Process(DateTime ToDate, int ClientID, string AccIDs, string ProdIDs, int? CurrID, string ConnectionString, string ClientsType
+            , string VersionSource, string CallerApplication, int BatchID, bool IsRegenerate = false, bool IsFxSettlement = true, int eff = 0, Guid primaryOperationId = default)
+        {
+            overallProcessTime = DateTime.UtcNow;
+            if (primaryOperationId != Guid.Empty)
+            {
+                primaryOperationID = primaryOperationId;
+            }
+            string global_guid = Guid.NewGuid().ToString();
+            string guid = Guid.NewGuid().ToString();
+            prodIdCount = !string.IsNullOrEmpty(ProdIDs) ? ProdIDs.Split(',').Count() : 0;
+            accIdCount = !string.IsNullOrEmpty(AccIDs) ? AccIDs.Split(',').Count() : 0;
+            var customDetails = new { ToDate = ToDate, ProdIdCount = prodIdCount, CurrID = CurrID, CallerApplication = CallerApplication };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            Logger.LogTraceMessage(ClientID, primaryOperationID, Guid.NewGuid(), BatchID, ToDate, "START: PNL Processing on Service", serializedcustomDetails, DateTime.UtcNow, DateTime.UtcNow, PNLSERVICE, logger, AccIDs, VersionSource);
+
+            var decoupleCheckTime = DateTime.UtcNow;
+            if (entityConfigClient != null)
+            {
+                //isDecoupledMasterApplicable = entityConfigClient.IsDecoupledMasterApplicableForService(ClientID, Constant.IsDecoupledMasterApplicableForPNLService);
+                serviceUrlsFromSystemInfo = entityConfigClient.GetSystemConfigurationData(ClientID.ToString(), SERVICEURL);
+            }
+
+            Logger.LogTraceMessage(ClientID, primaryOperationID, Guid.NewGuid(), BatchID, ToDate, "PNL IsDecoupling Enabled", string.Empty, decoupleCheckTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty, VersionSource);
+
+            var pnsLogForCarryForwardStartTime = DateTime.UtcNow;
+            var logObject = new CommonLogInfo()
+            {
+                BatchID = BatchID,
+                SubProcessName = "",
+                UserName = VersionSource,
+                ProcessRunBy = VersionSource,
+                GroupName = "",
+                EventName = $"Pnl Process:{global_guid}",
+                AccountIDs = AccIDs,
+                ProcessDate = ToDate,
+                ClientIDs = ClientID.ToString(),
+                CallerApplication = CallerApplication
+            };
+
+            System.Configuration.ConnectionStringSettingsCollection ConnectionStringSettingsCollectionObj = AppConfiguration.ConnectionStringSettingsCollection;
+            AppConfiguration.ApplicationName = ConnectionStringSettingsCollectionObj[0].Name;
+
+            var PendingPnlList = new List<PendingPnl>();
+            var allReportDates = new List<DateTime>();
+            lstOfProdIdsWithReportdate = new ConcurrentDictionary<ConcurrentDictionary<DateTime, int>, int>();
+            //    logObject.Logger($"Pnl Process:{global_guid}", "Start", $"ProdIDs:{ProdIDs} CurrID: {CurrID} ClientsType:{ClientsType}", commonLog, "Pnl Process");
+
+            ConnectionString += ";Max Pool Size = 500";
+            ResponseMsg response = new ResponseMsg();
+            response.Data = new Dictionary<string, string>();
+            response.Data.Add("ChecksOnService", ChecksOnService.ToString());
+            response.ErrorInfo = string.Empty;
+            DateTime successfulDate = DateTime.MinValue;
+            long maxPendingPnsID = 0;
+            List<int> lstAccounts = new List<int>();
+            List<int> lstOverallExtraAccountsForCostSourceProcess = new List<int>();
+
+
+            bool hasTakenLock = false;
+            try
+            {
+                MapObjects mapObjects = new MapObjects();
+                logFolderName = ClientID.ToString() + "_" + Regex.Replace(VersionSource, "[^0-9A-Za-z]+", "_") + "_" + DateTime.Now.ToString("ddMMyyyyHHmmss");
+                toDate = ToDate;
+                requestParameters = new RequestParameters(ClientID, ConnectionString, ClientsType, VersionSource, CallerApplication, IsRegenerate, IsFxSettlement, BatchID, logFolderName);
+                //requestParameters.Prameters.Add("CommonLogObj", ScopedCommonLog);
+                requestParameters.Prameters["ReportDate"] = toDate;
+                requestParameters.Prameters["AccIds"] = AccIDs;
+                requestParameters.primaryOperationId = primaryOperationID;
+                if (requestParameters.callerApplication == EnumRepository.CallerApplication.MAIN2)
+                {
+                    ProdIDs = null;
+                    CurrID = null;
+                }
+
+                logger.Warn.Write("Starting Pnl Process.", requestParameters.Prameters);
+
+                accIDs = AccIDs;
+                prodIDs = ProdIDs;
+                currID = CurrID;
+
+
+                //        logObject.Logger($"Fetch PnL Master Info:{guid}", "Start", $"ProdIDs:{ProdIDs}; CurrID: {CurrID}; BatchID:{BatchID}; AccID:{accIDs}", commonLog, "Fetch Pnl Master Info");
+                pnlRepository = new PnlRepository(requestParameters, isDecoupledMasterApplicable);
+
+                if (requestParameters.callerApplication == EnumRepository.CallerApplication.MAIN2)
+                {
+                    pnlRepository.CreatePnsLogForCarryForward(requestParameters, toDate, accIDs);
+                }
+
+                Logger.LogTraceMessage(ClientID, primaryOperationID, Guid.NewGuid(), BatchID, toDate, "PNL CreatePnsLogForCarryForward", string.Empty, pnsLogForCarryForwardStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+
+                var GetPNLMasterInfoOperationId = Guid.NewGuid();
+                DateTime GetPNLMasterInfoOperatioStartTime = DateTime.UtcNow;
+                Logger.LogTraceMessage(ClientID, primaryOperationID, GetPNLMasterInfoOperationId, BatchID, toDate, "START: Get PNL Master Info", string.Empty, GetPNLMasterInfoOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+                var pnlMasterInfo = pnlRepository.GetPnlMasterInfo(toDate, accIDs, prodIDs, currID, BatchID);
+                PendingPnlList = pnlMasterInfo.PendingPnlList;
+                var pendingAccs = PendingPnlList.Select(s => s.AccountID).Distinct();
+                requestParameters.Prameters["AccIds"] = string.Join(",", pendingAccs);
+                // End 'Fetch PNL Master Information' logging.
+                //       logObject.Logger($"Fetch PnL Master Info:{guid}", "End", $"ProdIDs:{ProdIDs}; CurrID: {CurrID}; BatchID:{BatchID}; AccID:{accIDs}", commonLog, "Fetch Pnl Master Info");
+
+                logger.Warn.Write(string.Format("Max Pending PNS ID={0}", pnlMasterInfo.MaxPendingPnsID), requestParameters.Prameters);
+
+                maxPendingPnsID = pnlMasterInfo.MaxPendingPnsID;
+                response.Data["MaxPendingPnsID"] = pnlMasterInfo.MaxPendingPnsID.ToString();
+                serializedcustomDetails = JsonConvert.SerializeObject(new { TableNames = string.Join(",", pnlMasterInfo.PendingPnlList.Select(x => x.TableName).Distinct()), PendingPnlCount = PendingPnlList.Count, PendingAccountsCount = pendingAccs.Count(), ProdIdsCount = pnlMasterInfo.PendingPnlList.Select(x => x.ProdID).Where(x => x != null && x > 0).Distinct().Count(), MaxPendingPnsId = maxPendingPnsID });
+                Logger.LogTraceMessage(ClientID, primaryOperationID, GetPNLMasterInfoOperationId, BatchID, toDate, "END: Get PNL Master Info", serializedcustomDetails, GetPNLMasterInfoOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Join(",", pendingAccs));
+
+                pnlStorage = new PnlStorage(requestParameters, pnlMasterInfo, toDate, logger);
+
+                bool isFactoredServiceToBeCalled = true;
+                if (!string.IsNullOrEmpty(ClientIDsToBeExcludedForFactoredTradeService))
+                {
+                    List<int> clientIDsToBeExcluded = ClientIDsToBeExcludedForFactoredTradeService.Split(',').Select(Int32.Parse).ToList();
+                    isFactoredServiceToBeCalled = !clientIDsToBeExcluded.Contains(ClientID);
+                }
+
+
+
+                if (CallerApplication.ToLower() == EnumRepository.CallerApplication.MAIN2.ToString().ToLower())
+                {
+
+                    lstAccounts = pnlStorage.GetAllPnlAccounts().ToList();
+                    lock (accountLock)
+                    {
+                        if (golbalAccountCache.Overlaps(lstAccounts))
+                        {
+                            List<int> alreadyRunningAccounts = golbalAccountCache.ToList().Intersect(lstAccounts).ToList();
+                            string alreadyRunningAccString = string.Join<int>(",", alreadyRunningAccounts);
+                            hasTakenLock = false;
+                            throw new Exception("Following accounts are already being run by another user , Please try after some time :" + alreadyRunningAccString);
+                        }
+                        else
+                        {
+                            foreach (int accID in lstAccounts)
+                            {
+                                golbalAccountCache.Add(accID);
+                            }
+                            hasTakenLock = true;
+                        }
+                    }
+                }
+
+                allReportDates = pnlStorage.GetAllReportDates();
+                fromDate = allReportDates.Min(s => s);
+                foreach (DateTime reportDate in allReportDates)
+                {
+                    guid = Guid.NewGuid().ToString();
+                    //These should be re-set in each date iteration
+                    colAffectedAccounts = new ConcurrentBag<AffectedAccountsForCostSourceSetPriceUpdate>();
+                    cbAutoSettleErrorProcessAccounts = new ConcurrentBag<AffectedItemsForAutoSettleError>();
+
+                    var ProcessCoreOperationId = Guid.NewGuid();
+                    string ProcessCoreOperationName = "Execute All Core Processes for Report Date";
+
+                    logger.Warn.Write($"Start Execute All Core Processes:GUID:{guid}; report date:{reportDate}", requestParameters.Prameters);
+
+                    var ProcessCoreCustomDetails = new { NoOfReportDates = allReportDates.Count, FromDate = fromDate, ToDate = toDate };
+                    var ProcessCoreSerializedcustomDetails = JsonConvert.SerializeObject(ProcessCoreCustomDetails);
+                    DateTime ProcessCoreOperatioStartTime = DateTime.UtcNow;
+                    Logger.LogTraceMessage(ClientID, primaryOperationID, ProcessCoreOperationId, BatchID, reportDate, $"START: {ProcessCoreOperationName}", ProcessCoreSerializedcustomDetails, ProcessCoreOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty, VersionSource);
+
+                    ProcessCore(false, reportDate, pnlMasterInfo, guid, isFactoredServiceToBeCalled, ClientID, BatchID, ConnectionString, logObject, response);
+
+                    logger.Warn.Write($"End Execute All Core Processes:GUID:{guid}; report date:{reportDate}", requestParameters.Prameters);
+
+                    Logger.LogTraceMessage(ClientID, primaryOperationID, ProcessCoreOperationId, BatchID, reportDate, $"END: {ProcessCoreOperationName}", ProcessCoreSerializedcustomDetails, ProcessCoreOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty, VersionSource);
+
+
+
+                    if (cbAutoSettleErrorProcessAccounts != null && cbAutoSettleErrorProcessAccounts.Count() > 0)
+                    {
+                        guid = Guid.NewGuid().ToString();
+                        var ProcessCoreBackupOperationId = Guid.NewGuid();
+                        string ProcessCoreBackupOperationName = "Auto Settle Error Process Accounts for re-execute All Core Processes";
+                        DateTime ProcessCoreBackupOperatioStartTime = DateTime.UtcNow;
+
+                        logger.Warn.Write($"Start Take Backup of PNL Master objects for re-execute All Core Processes:GUID:{guid}; report date:{reportDate}", requestParameters.Prameters);
+                        //First Take Backup of PNLMasterInfo (Deep Copy)
+                        PnlMasterInfo bckupPNLMasterInfo = (PnlMasterInfo)pnlMasterInfo.Clone();
+
+                        //Then update values of PNLMasterInfo, storage for temporary PNL Run
+                        List<PendingPnl> lstTempPnls = (from p1 in pnlMasterInfo.PendingPnlList
+                                                        join p2 in cbAutoSettleErrorProcessAccounts on
+                                                                                        new { AccountID = p1.AccountID }
+                                                                                 equals new { AccountID = p2.AccountID }
+                                                        select new PendingPnl
+                                                        {
+                                                            FromDate = p1.FromDate,
+                                                            AccountID = p2.AccountID,
+                                                            CurrID = p2.CurrID,
+                                                            ProdID = p2.ProdID,
+                                                            TableName = EnumRepository.PnlTable.trade_detail,
+                                                            IsCorporateActionTobeExecute = p1.IsCorporateActionTobeExecute,
+                                                            IsShadowClient = p1.IsShadowClient,
+                                                            IsGlobalCommitmentChanged = p1.IsGlobalCommitmentChanged,
+                                                            MaxPendingReportDate = p1.MaxPendingReportDate
+                                                        }).GroupBy(i => new { i.FromDate, i.AccountID, i.CurrID, i.ProdID, i.MaxPendingReportDate }).
+                                                        Select(g => g.First()).ToList();
+
+
+
+
+                        pnlMasterInfo.PendingPnlList = lstTempPnls;
+                        pnlMasterInfo.AccountList = pnlMasterInfo.AccountList.Where(x => cbAutoSettleErrorProcessAccounts.Select(y => y.AccountID).ToList().Contains(x.AccountID)).ToList();
+                        pnlStorage = new PnlStorage(requestParameters, pnlMasterInfo, toDate, logger);
+                        PendingPnlList = pnlMasterInfo.PendingPnlList;
+
+                        logger.Warn.Write($"End Take Backup of PNL Master objects for re-execute All Core Processes:GUID:{guid}; report date:{reportDate}", requestParameters.Prameters);
+
+                        //Perform Temporary PNL Run
+
+                        logger.Warn.Write($"Start Re-Execute All Core Processes:GUID:{guid}; report date:{reportDate}", requestParameters.Prameters);
+                        cbAutoSettleErrorProcessAccounts = new ConcurrentBag<AffectedItemsForAutoSettleError>();
+                        ProcessCore(true, reportDate, pnlMasterInfo, guid, isFactoredServiceToBeCalled, ClientID, BatchID, ConnectionString, logObject, response);
+                        logger.Warn.Write($"End Re-Execute All Core Processes:GUID:{guid}; report date:{reportDate}", requestParameters.Prameters);
+
+                        var ProcessCoreBackupCustomDetails = new { PendingPnlListCount = PendingPnlList.Count };
+                        var ProcessCoreBackupSerializedcustomDetails = JsonConvert.SerializeObject(ProcessCoreBackupCustomDetails);
+                        Logger.LogTraceMessage(ClientID, primaryOperationID, ProcessCoreBackupOperationId, BatchID, reportDate, ProcessCoreBackupOperationName, ProcessCoreBackupSerializedcustomDetails, ProcessCoreBackupOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, accIDs);
+
+
+                        //At last reassign PNLMasterInfo, PNLStorage and PendingPNLs again (Shallow copy)
+                        pnlMasterInfo = bckupPNLMasterInfo;
+                        pnlStorage = new PnlStorage(requestParameters, pnlMasterInfo, toDate, logger);
+                        PendingPnlList = pnlMasterInfo.PendingPnlList;
+
+                        //Set backup items to null pointer
+                        bckupPNLMasterInfo = null;
+
+                    }
+
+
+
+                    // Run Cost Source Set Price Process
+                    try
+                    {
+                        guid = Guid.NewGuid().ToString();
+                        var CostSourceSetPriceOperationId = Guid.NewGuid();
+                        string CostSourceSetPriceOperationName = "Set Price Update for Cost Source Products";
+                        DateTime CostSourceSetPriceOperatioStartTime = DateTime.UtcNow;
+                        //       logObject.Logger($"Set Price Update for Cost Source Products:{guid}", "Start", "", commonLog);
+
+                        GenerateProcessID objGenerateProcessIdGlc = GetProcessControlID(reportDate, "GENCSSP");
+                        CostSourceSetPrice objCostSourceSetPrice = new CostSourceSetPrice(requestParameters.clientID, pnlMasterInfo, reportDate, prodIDs, response, requestParameters);
+
+                        Tuple<List<AffectedAccountsForCostSourceSetPriceUpdate>, List<ProdCurrenciesForCostSourceSetPriceUpdate>> lstAffAccs = objCostSourceSetPrice.Process();
+
+                        if (lstAffAccs != null && lstAffAccs.Item1 != null && lstAffAccs.Item1.Count() > 0)
+                        {
+                            foreach (AffectedAccountsForCostSourceSetPriceUpdate accItem in lstAffAccs.Item1)
+                            {
+                                lock (objLock)
+                                {
+                                    if (!colAffectedAccounts.Contains(accItem))
+                                    {
+                                        colAffectedAccounts.Add(accItem);
+                                    }
+                                }
+                            }
+                        }
+
+
+                        SetStatus((int)EnumRepository.ProcessName.CostSourceSetPrice, objGenerateProcessIdGlc.ProcessControlID);
+
+                        //        logObject.Logger($"Set Price Update for Cost Source Products:{guid}", "End", "", commonLog);
+                        var CostSourceSetPriceCustomDetails = new { ProcessControlID = objGenerateProcessIdGlc.ProcessControlID, ProcessCode = EnumRepository.ProcessName.CostSourceSetPrice.ToString() };
+                        var CostSourceSetPriceSerializedcustomDetails = JsonConvert.SerializeObject(CostSourceSetPriceCustomDetails);
+                        Logger.LogTraceMessage(ClientID, primaryOperationID, CostSourceSetPriceOperationId, BatchID, reportDate, CostSourceSetPriceOperationName, CostSourceSetPriceSerializedcustomDetails, CostSourceSetPriceOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Critical(ex.Message, requestParameters.Prameters, ex);
+                        Logger.LogErrorMessage(ClientID, ex.ToString(), "Error in Set Price Update for Cost Source Products", primaryOperationID, Guid.NewGuid(), DateTime.UtcNow.AddDays(-1), 2, BatchID, PNLSERVICE, logger, accIDs);
+
+                        throw ex;
+                    }
+
+                    List<int> lstOverallAccounts = accountsNeedToBeExecuted.Split(',').Select(int.Parse).ToList();
+                    List<int> lstAffectedAccounts = colAffectedAccounts.Select(x => x.AccountID).Distinct().ToList();
+                    List<int> lstExtraAccounts = lstAffectedAccounts.Except(lstOverallAccounts).ToList();
+
+
+                    if (colAffectedAccounts != null && colAffectedAccounts.Count() > 0)
+                    {
+                        var CostSourceAccOperationId = Guid.NewGuid();
+                        string CostSourceAccOperationName = "Cost Source Process for extra accounts";
+                        DateTime CostSourceAccOperatioStartTime = DateTime.UtcNow;
+                        object syncLock = new object();
+                        //cost source extra accounts
+                        if (lstExtraAccounts != null && lstExtraAccounts.Count() > 0)
+                        {
+                            lstOverallExtraAccountsForCostSourceProcess = lstOverallExtraAccountsForCostSourceProcess.Union(lstExtraAccounts).ToList();
+
+                            string strExtraAccounts = String.Join(",", lstExtraAccounts);
+
+                            if (!string.IsNullOrWhiteSpace(accountsNeedToBeExecuted))
+                            {
+                                accountsNeedToBeExecuted = accountsNeedToBeExecuted + "," + String.Join(",", strExtraAccounts);
+                            }
+                            else
+                            {
+                                accountsNeedToBeExecuted = String.Join(",", strExtraAccounts);
+                            }
+
+                            //Take locking 
+                            List<int> lstNewLockToBeTaken = lstExtraAccounts.Except(lstAccounts).ToList();
+
+                            lock (accountLock)
+                            {
+                                if (golbalAccountCache.Overlaps(lstNewLockToBeTaken))
+                                {
+                                    //in this case we need not unlock accounts where we already have taken lock since Finally block will take care of that
+                                    List<int> alreadyRunningAccounts = golbalAccountCache.ToList().Intersect(lstNewLockToBeTaken).ToList();
+                                    string alreadyRunningAccString = string.Join<int>(",", alreadyRunningAccounts);
+                                    throw new Exception("Following accounts are already being run by another user , Please try after some time :" + alreadyRunningAccString);
+                                }
+                                else
+                                {
+                                    foreach (int accID in lstNewLockToBeTaken)
+                                    {
+                                        golbalAccountCache.Add(accID);
+                                    }
+                                    hasTakenLock = true;
+                                }
+                            }
+
+
+                            //Initiation process after locking
+                            pnlRepository.CreatePnsLogForCarryForward(requestParameters, toDate, strExtraAccounts);
+
+
+                            bool isShadowClient = pnlMasterInfo.AccountList.Any(p => p.IsShadowClient);
+
+                            //Add Extra Accounts Details
+                            List<Account> lstAccDetails = pnlRepository.GetAccountsList(toDate, strExtraAccounts);
+                            var accountComparer = new AccountComparer();
+                            pnlMasterInfo.AccountList = pnlMasterInfo.AccountList.Union(lstAccDetails, accountComparer).ToList();
+
+                            //Add Extra Accounts PNS Items manually
+                            foreach (AffectedAccountsForCostSourceSetPriceUpdate itemAcc in colAffectedAccounts)
+                            {
+                                PendingPnl pendingPnl = new PendingPnl();
+
+                                pendingPnl.FromDate = reportDate;
+                                pendingPnl.AccountID = itemAcc.AccountID;
+                                pendingPnl.CurrID = itemAcc.CurrID;
+                                pendingPnl.ProdID = itemAcc.ProdID;
+                                pendingPnl.TableName = EnumRepository.PnlTable.open_detail;
+                                pendingPnl.IsCorporateActionTobeExecute = false;
+                                pendingPnl.IsGlobalCommitmentChanged = false;
+                                pendingPnl.IsShadowClient = isShadowClient;
+                                pendingPnl.MaxPendingReportDate = reportDate;
+
+                                pnlMasterInfo.PendingPnlList.Add(pendingPnl);
+                            }
+
+                            PendingPnlList = pnlMasterInfo.PendingPnlList;
+                            logger.Warn.Write("Accounts before merge cost source", requestParameters.Prameters);
+                            requestParameters.Prameters["AccIds"] = string.Join(",", PendingPnlList.Select(s => s.AccountID).Distinct());
+                            //Then Re-Update PNL Storage for new accounts
+                            logger.Warn.Write("Accounts After merge cost source", requestParameters.Prameters);
+                            pnlStorage.ReUpdate(pnlMasterInfo);
+
+                            ParallelProcess(true, reportDate, lstAffectedAccounts, pnlMasterInfo, response, syncLock);
+
+                            var CostSourceAccCustomDetails = new { ProdIDs = ProdIDs, CurrID = currID };
+                            var CostSourceAccSerializedcustomDetails = JsonConvert.SerializeObject(CostSourceAccCustomDetails);
+                            Logger.LogTraceMessage(ClientID, primaryOperationID, CostSourceAccOperationId, BatchID, toDate, CostSourceAccOperationName, CostSourceAccSerializedcustomDetails, CostSourceAccOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Join(",", PendingPnlList.Select(s => s.AccountID).Distinct()), VersionSource);
+
+                        }
+                        else
+                        {
+                            var CostSourceOperationId = Guid.NewGuid();
+                            string CostSourceOperationName = "Cost Source Process";
+                            DateTime CostSourceOperatioStartTime = DateTime.UtcNow;
+
+                            ParallelProcess(true, reportDate, lstAffectedAccounts, pnlMasterInfo, response, syncLock);
+
+                            var CostSourceCustomDetails = new { AccIdCount = lstAffectedAccounts.Count };
+                            var CostSourceSerializedcustomDetails = JsonConvert.SerializeObject(CostSourceCustomDetails);
+                            Logger.LogTraceMessage(ClientID, primaryOperationID, CostSourceOperationId, BatchID, reportDate, CostSourceOperationName, CostSourceSerializedcustomDetails, CostSourceOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Join(",", PendingPnlList.Select(s => s.AccountID).Distinct()), VersionSource);
+
+                        }
+                    }
+
+                    //Security Level service Engine Process 
+                    if (pnlMasterInfo.SecurityLevelServiceCheck != null && pnlMasterInfo.SecurityLevelServiceCheck.Count > 0)
+                    {
+
+                        var allaccounts = pnlStorage.GetAllPnlAccounts(reportDate).ToList();
+                        string jsonAccIDs = JsonConvert.SerializeObject(allaccounts);
+
+                        GetUsedCurrenciesForAssetLevelGeneration getUsedCurrenciesForAssetLevelGeneration = new GetUsedCurrenciesForAssetLevelGeneration(requestParameters, reportDate, jsonAccIDs);
+                        getUsedCurrenciesForAssetLevelGeneration.ExecuteDataSet();
+                        List<CurrencyForAssetLevelGen> lstCurrIDs = getUsedCurrenciesForAssetLevelGeneration.lstCurrIDs;
+
+
+
+                        GetCurrIDsForCryptoItems getCurrIDsForCryptoItems = new GetCurrIDsForCryptoItems(requestParameters, ApplicationConfig.MasterConnectionString);
+                        getCurrIDsForCryptoItems.ExecuteDataSet();
+                        List<CurrencyForCryptoAssetLevel> lstCryptoCurrIDs = getCurrIDsForCryptoItems.lstCurrIDs;
+
+                        if (pnlMasterInfo.SecurityLevelServiceCheck[0].SecurityLevelCheck == 1 && yearEndDate == reportDate)
+                        {
+                            var SecurityLevelServiceOperationId = Guid.NewGuid();
+                            string SecurityLevelServiceOperationName = "Security Level Service Process";
+                            DateTime SecurityLevelServiceOperatioStartTime = DateTime.UtcNow;
+
+                            guid = Guid.NewGuid().ToString();
+                            //           logObject.Logger($"Security Level Service Process:{guid}", "Start", "", commonLog, "Security Level Service Process");
+                            logger.Warn.Write("Starting Security Level Service Process.", requestParameters.Prameters);
+
+                            GenerateProcessID objGenerateProcessIdSLs = GetProcessControlID(reportDate, "GENSLS");
+
+                            List<ProductData> lstActualProds = new List<ProductData>();
+                            if (lstOfProdIdsWithReportdate != null && lstOfProdIdsWithReportdate.Any())
+                            {
+                                List<int> prodIds = new List<int>();
+                                foreach (var item in lstOfProdIdsWithReportdate)
+                                {
+                                    var obj = item.Key;
+                                    prodIds.AddRange(obj.Where(x => x.Key == yearEndDate).Select(x => x.Value).ToList());
+                                }
+
+
+                                ProductServiceClient productServiceClient = new ProductServiceClient(ApplicationConfig.Main2MastersAPIURL);
+
+                                var productFilter = new ProductFilter { Ids = string.Join(",", prodIds.Distinct().ToList()) };
+
+                                //GetProductsForFilterCriteriaAsync
+                                var prodDataTask = productServiceClient.GetMasterProductsForFilterCriteriaAsync(productFilter);
+
+
+                                Task.WaitAll(prodDataTask);
+
+
+
+                                foreach (var pdItem in prodDataTask.Result.ToList())
+                                {
+                                    ProductData productsData = new ProductData();
+                                    productsData.ProdID = pdItem.ProdID;
+                                    productsData.ProdType = pdItem.ProdType;
+                                    lstActualProds.Add(productsData);
+                                }
+                            }
+
+
+                            var currProds = from i in getCurrIDsForCryptoItems.lstCurrIDs
+                                            join a in getUsedCurrenciesForAssetLevelGeneration.lstCurrIDs on i.ProdID equals a.CurrID
+                                            select new
+                                            {
+                                                ProdID = i.ProdID,
+                                                ProdType = i.ProdType,
+                                            };
+
+                            if (currProds != null && currProds.Any())
+                            {
+                                foreach (var currItem in currProds)
+                                {
+                                    ProductData productsData = new ProductData();
+                                    productsData.ProdID = currItem.ProdID;
+                                    productsData.ProdType = currItem.ProdType;
+                                    lstActualProds.Add(productsData);
+                                }
+                            }
+
+                            SecurityLevel objSecurityLevel = new SecurityLevel(requestParameters.clientID, reportDate, lstActualProds);
+                            objSecurityLevel.Process();
+
+                            SetStatus((int)EnumRepository.ProcessName.SecurityLevelService, objGenerateProcessIdSLs.ProcessControlID);
+
+                            // logObject.Logger($"Security Level Service Process:{guid}", "End", "", commonLog, "Security Level Service");
+                            Logger.LogTraceMessage(ClientID, primaryOperationID, SecurityLevelServiceOperationId, BatchID, reportDate, SecurityLevelServiceOperationName, string.Empty, SecurityLevelServiceOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty, VersionSource);
+
+                        }
+                    }
+                    successfulDate = reportDate;
+                    logger.Warn.Write("completed Pnl Process for report date " + reportDate.ToString(), requestParameters.Prameters);
+
+                    if (IsRORModuleApplicable)
+                    {
+                        try
+                        {
+                            guid = Guid.NewGuid().ToString();
+                            //             logObject.Logger($"Insert Pending ROR data:{guid}", "Start", "", commonLog);
+                            InsertPendingRORdata(PendingPnlList, requestParameters, reportDate);
+                            //                 logObject.Logger($"Pending ROR data:{guid}", "Inserted", "", commonLog);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.Critical(ex.Message, requestParameters.Prameters, ex);
+                        }
+                    }
+
+                }
+                if (IsRORModuleApplicable)
+                {
+                    var jsondata = JsonConvert.SerializeObject(new { BatchID = requestParameters.batchID, ConnectionString = requestParameters.connectionString, PrimaryOperationId = requestParameters.primaryOperationId });
+                    Task task = new Task(() => CallApi(jsondata, "", ApplicationConfig.CalculateRORServiceUrl));
+                    task.Start();
+                }
+
+
+
+            }
+
+            catch (AggregateException ae)
+            {
+                if (ae.InnerExceptions.Count > 0)
+                {
+                    Exception e = ae.InnerExceptions.FirstOrDefault();
+                    handleException(e, response, successfulDate);
+                }
+
+                Logger.LogErrorMessage(ClientID, ae.ToString(), "Error in PNS Process", primaryOperationID, Guid.NewGuid(), successfulDate, 2, BatchID, PNLSERVICE, logger, accIDs);
+
+            }
+
+            catch (Exception ex)
+            {
+
+                Logger.LogErrorMessage(ClientID, ex.ToString(), "Error in PNS Process", primaryOperationID, Guid.NewGuid(), successfulDate, 2, BatchID, PNLSERVICE, logger, accIDs);
+                handleException(ex, response, successfulDate);
+            }
+            finally
+            {
+                try
+                {
+                    if (successfulDate != DateTime.MinValue)
+                    {
+                        var ChecksOperationId = Guid.NewGuid();
+                        string ChecksOperationName = "Checks Processing and Sign Off Process";
+                        DateTime ChecksOperatioStartTime = DateTime.UtcNow;
+
+                        guid = Guid.NewGuid().ToString();
+                        //           logObject.Logger($"Checks Processing and Sign Off Process:{guid}", "Start", $"Connection String:{ConnectionString}; Request Parameters: {JsonConvert.SerializeObject(requestParameters)}; BatchID:{BatchID}; Report Date:{successfulDate};", commonLog, "Checks Processing and Sign Off Process");
+                        //need logging
+                        CalculateChecks(successfulDate, maxPendingPnsID, eff);
+                        //         logObject.Logger($"Checks Processing and Sign Off Process:{guid}", "End", $"Connection String:{ConnectionString}; Request Parameters: {JsonConvert.SerializeObject(requestParameters)}; BatchID:{BatchID}; Report Date:{successfulDate};", commonLog, "Checks Processing and Sign Off Process");
+
+                        var ChecksCustomDetails = new { AccIdCount = !string.IsNullOrEmpty(accountsNeedToBeExecuted) ? accountsNeedToBeExecuted.Split(',').Count() : 0, MaxPendingPnsID = maxPendingPnsID };
+                        var ChecksSerializedcustomDetails = JsonConvert.SerializeObject(ChecksCustomDetails);
+                        Logger.LogTraceMessage(ClientID, primaryOperationID, ChecksOperationId, BatchID, successfulDate, ChecksOperationName, ChecksSerializedcustomDetails, ChecksOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+                    }
+
+                    Logger.LogTraceMessage(ClientID, primaryOperationID, Guid.NewGuid(), BatchID, successfulDate, "Overall PNL Process Completion", string.Empty, overallProcessTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogErrorMessage(ClientID, ex.ToString(), "Error in Checks and SignOff", primaryOperationID, Guid.NewGuid(), successfulDate, 2, BatchID, PNLSERVICE, logger, accIDs);
+
+                    handleException(ex, response, successfulDate);
+                }
+                finally
+                {
+                    if (CallerApplication == EnumRepository.CallerApplication.MAIN2.ToString())
+                    {
+                        if (hasTakenLock)
+                        {
+                            lock (accountLock)
+                            {
+
+                                //Remove extra accounts as well from cache
+                                try
+                                {
+                                    foreach (int accID in lstAccounts)
+                                    {
+                                        golbalAccountCache.Remove(accID);
+                                    }
+
+                                    foreach (int accID in lstOverallExtraAccountsForCostSourceProcess)
+                                    {
+                                        if (golbalAccountCache.Contains(accID))
+                                        {
+                                            golbalAccountCache.Remove(accID);
+                                        }
+                                    }
+
+                                    if (lstOverallExtraAccountsForCostSourceProcess != null && lstOverallExtraAccountsForCostSourceProcess.Any())
+                                    {
+                                        if (!response.Data.ContainsKey("CostSourceExtraAccounts"))
+                                        {
+                                            response.Data.Add("CostSourceExtraAccounts", JsonConvert.SerializeObject(lstOverallExtraAccountsForCostSourceProcess));
+                                        }
+                                        else
+                                        {
+                                            response.Data["CostSourceExtraAccounts"] = JsonConvert.SerializeObject(lstOverallExtraAccountsForCostSourceProcess);
+                                        }
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    Logger.LogErrorMessage(ClientID, ex.ToString(), "Error in PNS Process", primaryOperationID, Guid.NewGuid(), DateTime.UtcNow.AddDays(-1), 2, BatchID, PNLSERVICE, logger, accIDs);
+                                }
+
+                            }
+                        }
+                    }
+
+                }
+
+                //       logObject.Logger($"Pnl Process:{global_guid}", "End", $"ProdIDs:{ProdIDs} CurrID: {CurrID} ClientsType:{ClientsType}", commonLog, "Pnl Process");
+
+
+            }
+
+            return response;
+        }
+
+
+
+        private void ProcessCore(bool isReExecute, DateTime reportDate, PnlMasterInfo pnlMasterInfo, string guid, bool isFactoredServiceToBeCalled, int ClientID, int BatchID, string ConnectionString,
+            CommonLogInfo logObject, ResponseMsg response)
+        {
+            List<A01AccountID> a01AccountIDs = new List<A01AccountID>();
+
+            if (requestParameters.callerApplication == EnumRepository.CallerApplication.MAIN2)
+            {
+                /* 1. Factored Trade Creation Process */
+                if (isFactoredServiceToBeCalled && pnlMasterInfo.PendingPnlList.Any
+                        (e => (
+                                (e.TableName == EnumRepository.PnlTable.data_generation ||
+                                 e.TableName == EnumRepository.PnlTable.MasterPricingFactor ||
+                                 e.TableName == EnumRepository.PnlTable.ClientPricingFactor ||
+                                  e.TableName == EnumRepository.PnlTable.trade_detail
+                                ) && e.FromDate <= reportDate
+
+
+                        )
+                   ))
+                {
+                    try
+                    {
+                        var FactorTradeOperationId = Guid.NewGuid();
+                        string FactorTradeOperationName = "Factor Trade Generation";
+                        DateTime FactorTradeOperatioStartTime = DateTime.UtcNow;
+                        var FactorTradeCustomDetails = new { PendingPnlListCount = pnlMasterInfo.PendingPnlList.Count };
+                        var FactorTradeSerializedcustomDetails = JsonConvert.SerializeObject(FactorTradeCustomDetails);
+                        Logger.LogTraceMessage(ClientID, primaryOperationID, FactorTradeOperationId, BatchID, reportDate, $"START: { FactorTradeOperationName}", string.Empty, FactorTradeOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+
+                        logger.Warn.Write("Starting Factor Trade Generation Process.", requestParameters.Prameters);
+                        GenerateProcessID objGenerateProcessIdFtd = GetProcessControlID(reportDate, "GENFTD");
+                        FactoredTradesRequestSet factoredTradesRequestSet = new FactoredTradesRequestSet();
+                        factoredTradesRequestSet.ClientID = ClientID;
+                        factoredTradesRequestSet.PendingPnlList = pnlMasterInfo.PendingPnlList;
+                        factoredTradesRequestSet.ReportDate = reportDate;
+                        factoredTradesRequestSet.BatchID = BatchID;
+                        factoredTradesRequestSet.ConnectionString = ConnectionString;
+                        factoredTradesRequestSet.HolidayList = pnlMasterInfo.HolidayList;
+                        factoredTradesRequestSet.PrimaryOperationID = primaryOperationID;
+
+                        //Start 'Factored Trade Generation' logging.
+                        //               logObject.Logger($"Factored Trade Generation:{guid}", "Start", JsonConvert.SerializeObject(factoredTradesRequestSet), commonLog, "Factored Trade Generation");
+                        requestStartTime = DateTime.UtcNow;
+                        var result = PnlHelper.ExecuteWebRequest(ConfigurationManager.AppSettings.Get("FactoredTradeServiceEndPoint") + "GenerateFactorTrades", "PUT", factoredTradesRequestSet);
+
+                        SetStatus((int)EnumRepository.ProcessName.FactorTrade, objGenerateProcessIdFtd.ProcessControlID);
+                        logger.Warn.Write("End Factor Trade Generation Process.", requestParameters.Prameters);
+                        Logger.LogTraceMessage(ClientID, primaryOperationID, FactorTradeOperationId, BatchID, reportDate, $"END: { FactorTradeOperationName}", FactorTradeSerializedcustomDetails, requestStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+
+
+                        //           logObject.Logger($"Factored Trade Generation:{guid}", "End", JsonConvert.SerializeObject(factoredTradesRequestSet), commonLog, "Factored Trade Generation");
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Critical("Error in Factor Trade Generation", requestParameters.Prameters, ex);
+                        Logger.LogErrorMessage(ClientID, ex.ToString(), "Error in Factor Trade Generation", primaryOperationID, Guid.NewGuid(), reportDate, 2, BatchID, PNLSERVICE, logger, accIDs);
+
+                        throw;
+                    }
+                }
+                /* Factor Trades Process Ends Here */
+                logger.Warn.Write(string.Format("Starting Corporate Action Service Process. IsService On :{0} ", pnlMasterInfo.CorporateActionServiceOn), requestParameters.Prameters);
+
+
+                if (pnlMasterInfo.CorporateActionServiceOn)
+                {
+                    guid = Guid.NewGuid().ToString();
+                    //     logObject.Logger($"Corporate Action Service Process:{guid}", "Start", $"Connection String:{ConnectionString}; Request Parameters: {JsonConvert.SerializeObject(requestParameters)}; BatchID:{BatchID}; Report Date:{reportDate};", commonLog, "Corporate Action Service Process");
+
+                    logger.Warn.Write("Starting Corporate Action Service Process.", requestParameters.Prameters);
+                    requestStartTime = DateTime.UtcNow;
+                    GenerateProcessID objGenerateProcessIdCoa = GetProcessControlID(reportDate, "GENCOA");
+
+                    CorporateAction(ClientID, ConnectionString, BatchID, pnlMasterInfo, reportDate, requestParameters);
+                    SetStatus((int)EnumRepository.ProcessName.CorporateAction, objGenerateProcessIdCoa.ProcessControlID);
+                    logger.Warn.Write("end Corporate Action Service Process.", requestParameters.Prameters);
+                }
+
+                var GlobalCommitmentOperationId = Guid.NewGuid();
+                string GlobalCommitmentOperationName = "Global Commitment Process";
+                DateTime GlobalCommitmentOperatioStartTime = DateTime.UtcNow;
+                guid = Guid.NewGuid().ToString();
+                //      logObject.Logger($"Global Commitment Process:{guid}", "Start", "", commonLog, "Global Commitment Process");
+                requestStartTime = DateTime.UtcNow;
+                logger.Debug.Write("Starting GlobalCommitment Trades Process.", requestParameters.Prameters);
+
+                Logger.LogTraceMessage(ClientID, primaryOperationID, GlobalCommitmentOperationId, BatchID, reportDate, $"START: { GlobalCommitmentOperationName}", string.Empty, requestStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+                GenerateProcessID objGenerateProcessIdGlc = GetProcessControlID(reportDate, "GENGLC");
+                GlobalCommitment objGlobalCommitment = new GlobalCommitment(ClientID, pnlMasterInfo, reportDate, prodIDs, requestParameters);
+                requestStartTime = DateTime.UtcNow;
+                objGlobalCommitment.Process();
+                Logger.LogTraceMessage(ClientID, primaryOperationID, GlobalCommitmentOperationId, BatchID, reportDate, $"END: { GlobalCommitmentOperationName}", string.Empty, requestStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+                SetStatus((int)EnumRepository.ProcessName.GlobalCommitment, objGenerateProcessIdGlc.ProcessControlID);
+                logger.Debug.Write("End GlobalCommitment Trades Process.", requestParameters.Prameters);
+
+                //       logObject.Logger($"Global Commitment Process:{guid}", "End", "", commonLog, "Global Commitment Process");
+
+            }
+
+            var allaccounts = pnlStorage.GetAllPnlAccounts(reportDate);
+
+            #region Delete Option Assignments
+            var CleanOAOperationId = Guid.NewGuid();
+            string CleanOAOperationName = "Delete Option Assignments";
+            DateTime CleanOAOperatioStartTime = DateTime.UtcNow;
+            var CleanOACustomDetails = new { AccountIDCount = allaccounts.Count() };
+            var CleanOASerializedcustomDetails = JsonConvert.SerializeObject(CleanOACustomDetails);
+            OptionAssignment OA = new OptionAssignment(requestParameters, reportDate
+                                  , pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.OptionAssignment, allaccounts.ToList())
+                                  , pnlMasterInfo, logger, null, isDecoupledMasterApplicable);
+            Logger.LogTraceMessage(ClientID, primaryOperationID, CleanOAOperationId, BatchID, reportDate, $"START: {CleanOAOperationName}", CleanOASerializedcustomDetails, DateTime.UtcNow, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+            OA.CleanOAModuleData();
+
+            #region Kafka logging
+
+            Logger.LogTraceMessage(ClientID, primaryOperationID, CleanOAOperationId, BatchID, reportDate, $"END: {CleanOAOperationName}", CleanOASerializedcustomDetails, CleanOAOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+            #endregion
+            #endregion
+
+            #region Delete Interest SLM Trades
+            var DeleteInterestSLMOperationId = Guid.NewGuid();
+            var interestPnlData = pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.InterestCalculation, allaccounts.ToList());
+            string DeleteInterestSLMOperationName = "Delete Interest SLM Trades";
+            DateTime DeleteInterestSLMOperationStartTime = DateTime.UtcNow;
+            guid = Guid.NewGuid().ToString();
+            var DeleteInterestSLMcustomDetails = new { InterestPNLDataCount = interestPnlData.Count };
+            var DeleteinterestSerializedDetails = JsonConvert.SerializeObject(DeleteInterestSLMcustomDetails);
+            Logger.LogTraceMessage(ClientID, primaryOperationID, DeleteInterestSLMOperationId, BatchID, reportDate, $"START: {DeleteInterestSLMOperationName}", DeleteinterestSerializedDetails, DateTime.UtcNow, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+            requestStartTime = DateTime.UtcNow;
+
+            DeleteInterestSLM(reportDate
+                , PnlHelper.GetPnlXml(interestPnlData)
+                , requestParameters, interestPnlData);
+            Logger.LogTraceMessage(ClientID, primaryOperationID, DeleteInterestSLMOperationId, BatchID, reportDate, $"END: {DeleteInterestSLMOperationName}", DeleteinterestSerializedDetails, requestStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+            #endregion
+
+            #region Calling Exposure Generation
+
+            pnlStorage.ValidateExposureGeneration(reportDate, allaccounts.ToList());
+
+            var exposureProcessPnls = pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.ExposureGeneration, allaccounts.ToList());
+            if (!exposureProcessPnls.IsNullOrEmpty())
+            {
+                var ExposureOperationId = Guid.NewGuid();
+                string ExposureOperationName = "Exposure Generation";
+                DateTime ExposureOperatioStartTime = DateTime.UtcNow;
+
+                guid = Guid.NewGuid().ToString();
+                //       logObject.Logger($"Exposure Generation:{guid}", "Start", "", commonLog, "Exposure Generation");
+                ExposureGeneration exposureGeneration = new ExposureGeneration(reportDate, pnlMasterInfo
+                                            , requestParameters, exposureProcessPnls, response, logger);
+                var exposureGenerationCustomDetails = new { ExposurePnlsCount = exposureProcessPnls.Count, AccIdCount = exposureProcessPnls.Select(x => x.AccountID).Distinct().Count() };
+                var exposureGenerationSerializeDetails = JsonConvert.SerializeObject(exposureGenerationCustomDetails);
+                Logger.LogTraceMessage(ClientID, primaryOperationID, ExposureOperationId, BatchID, reportDate, $"START: { ExposureOperationName}", exposureGenerationSerializeDetails, ExposureOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+                exposureGeneration.process(isDecoupledMasterApplicable);
+
+                //        logObject.Logger($"Exposure Generation:{guid}", "End", "", commonLog, "Exposure Generation");
+                #region Kafka logging
+                Logger.LogTraceMessage(ClientID, primaryOperationID, ExposureOperationId, BatchID, reportDate, $"END: {ExposureOperationName}", string.Empty, ExposureOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+                #endregion
+            }
+
+            #endregion
+
+
+            var threadCount = pnlStorage.GetNumberOfThreads(reportDate);
+
+            List<List<int>> accountchunks = new List<List<int>>();
+            List<int> executableaccs = new List<int>();
+            if (threadCount > 1)
+            {
+                var GetAccountForA01OperationId = Guid.NewGuid();
+                string GetAccountForA01OperationName = "Get Account For A01";
+                DateTime GetAccountForA01StartTime = DateTime.UtcNow;
+                guid = Guid.NewGuid().ToString();
+
+                Logger.LogTraceMessage(ClientID, primaryOperationID, GetAccountForA01OperationId, BatchID, reportDate, $"START: { GetAccountForA01OperationName}", string.Empty, DateTime.UtcNow, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+                GetAccountForA01 getAccountForA01 = new GetAccountForA01(requestParameters, reportDate);
+
+                getAccountForA01.ExecuteDataSet();
+                Logger.LogTraceMessage(ClientID, primaryOperationID, GetAccountForA01OperationId, BatchID, reportDate, $"END: { GetAccountForA01OperationName}", string.Empty, GetAccountForA01StartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+                a01AccountIDs = getAccountForA01.AccountIDs;
+                var a01accs = a01AccountIDs.Select(s => s.AccountID).ToList();
+                executableaccs = a01accs.Where(x => allaccounts.Contains(x)).ToList();
+                if (executableaccs != null && executableaccs.Any())
+                {
+                    accountchunks.Add(executableaccs.ToList());
+                    threadCount = threadCount - 1;
+                }
+
+                //            logObject.Logger($"Get Account For A01:{guid}", "End", $"Report Date:{reportDate}; Request Parameters:{JsonConvert.SerializeObject(requestParameters)}; ", commonLog, "Get Account For A01");
+            }
+
+            var nonA01Accs = allaccounts.Where(x => !executableaccs.Contains(x)).ToList();
+            int size = nonA01Accs.Count / threadCount;
+            var accountchunksNonA01 = SplitList(nonA01Accs, size);
+            accountchunks.AddRange(accountchunksNonA01);
+            object syncLock = new object();
+            var taskList = new List<Task>();
+            int totalAccCount = accountchunks.SelectMany(x => x).Distinct().Count();
+            foreach (var accountIdForexecution in accountchunks)
+            {
+                var accParallel = new { ThreadCount = threadCount, TotalAccIdsToProcess = totalAccCount, AccIdCount = accountIdForexecution.Count };
+                var accParallelSerializeDetails = JsonConvert.SerializeObject(accParallel);
+
+                Logger.LogTraceMessage(ClientID, primaryOperationID, Guid.NewGuid(), BatchID, reportDate, $"START: Parallel Processing for Accounts in Chunks", accParallelSerializeDetails, DateTime.UtcNow, DateTime.UtcNow, PNLSERVICE, logger, string.Join(",", accountIdForexecution));
+
+                string accounts = string.Empty;
+                if (accountIdForexecution != null && accountIdForexecution.Any())
+                {
+                    accounts = String.Join(",", accountIdForexecution);
+                    if (!isReExecute) //Need to add items to the list accountsNeedToBeExecuted only in first execution
+                    {
+                        if (!string.IsNullOrWhiteSpace(accountsNeedToBeExecuted))
+                        {
+                            accountsNeedToBeExecuted = accountsNeedToBeExecuted + "," + String.Join(",", accountIdForexecution);
+                        }
+                        else
+                        {
+                            accountsNeedToBeExecuted = String.Join(",", accountIdForexecution);
+                        }
+                    }
+
+                }
+
+                logger.Warn.Write("Creating thread for  " + accounts + " total number " + accountIdForexecution.Count, requestParameters.Prameters);
+                Task temp = new Task(() => ParallelProcess(isReExecute, reportDate, accountIdForexecution, pnlMasterInfo, response, syncLock));
+                taskList.Add(temp);
+            }
+
+            foreach (var task in taskList)
+            {
+                task.Start();
+                Thread.Sleep(500);
+            }
+            Task.WaitAll(taskList.ToArray());
+        }
+
+
+
+        private void InsertPendingRORdata(List<PendingPnl> PendingPnlList, RequestParameters req, DateTime reportDate)
+        {
+            try
+            {
+                List<AccCurrProdData> accCurrProdLst = PendingPnlList.Where
+                    (e => e.FromDate <= reportDate
+                               ).Select(x => new AccCurrProdData
+                               {
+                                   AccountID = x.AccountID,
+                                   ProductID = x.ProdID,
+                                   CurrID = x.CurrID
+                               }
+                               ).Distinct().ToList();
+
+                //First Remove those account's extraneous items which are already present at Account Level (currID, ProdID both null)
+                var accountLevelAccIDs = accCurrProdLst?.Where(y => y.AccountID != 0 && y.CurrID == null && y.ProductID == null).Select(y => y.AccountID).Distinct().ToList();
+
+                foreach (int accID in accountLevelAccIDs)
+                {
+                    accCurrProdLst.RemoveAll(x => x.AccountID == accID && !(x.CurrID == null && x.ProductID == null));
+                }
+
+                //Then Remove those account's extraneous items which are already present at Account Level + Currency Level ( ProdID is null)
+                var currencyLevelAccIDs = accCurrProdLst?.Where(y => y.AccountID != 0 && y.CurrID != null && y.ProductID == null).Select(y => y.AccountID).Distinct().ToList();
+
+                foreach (int accID in currencyLevelAccIDs)
+                {
+                    accCurrProdLst.RemoveAll(x => x.AccountID == accID && x.CurrID != null && x.ProductID != null);
+                }
+
+                var jAccCurrProdLst = JsonConvert.SerializeObject(accCurrProdLst);
+                //ProcessRORRequestSet processRORRequestSet = new ProcessRORRequestSet(clientID, connectionString, jAccCurrProdLst, reportDate, String.Empty);
+                //var jsondata = JsonConvert.SerializeObject(processRORRequestSet);
+
+                //returnString = CallApi(jsondata, "", ApplicationConfig.CalculateRORServiceUrl);
+                SetPendingRORCalculation setPendingRorData = new SetPendingRORCalculation(req, reportDate, jAccCurrProdLst);
+                setPendingRorData.ExecuteNonQuery();
+
+            }
+            catch (Exception ex)
+            {
+                logger.Critical("Problem in inserting pending ROR calculation data" + ex, requestParameters.Prameters);
+            }
+        }
+
+        public void handleException(Exception ex, ResponseMsg response, DateTime successfulDate)
+        {
+            string msg = string.Empty;
+            if (!string.IsNullOrEmpty(ex.Message))
+            {
+                msg = ex.Message;
+            }
+            response.ErrorInfo = response.ErrorInfo + " " + Environment.NewLine + msg;
+
+            if (successfulDate != DateTime.MinValue)
+            {
+                response.Data.Add("ReportDate", successfulDate.ToString());
+            }
+            logger.Critical(response.ErrorInfo, requestParameters.Prameters, ex);
+        }
+        private void GenerateCashSummary(DateTime reportDate, List<int> AccountIDs)
+        {
+            if (requestParameters.callerApplication == EnumRepository.CallerApplication.MAIN2)
+            {
+                logger.Warn.Write("Start: Cash Summary Generation Process", requestParameters.Prameters);
+                var cashSummaryXml = PnlHelper.GetPnlXml(pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.CashSummaryGeneration, AccountIDs));
+                GenerateCashSummary generateCashSummary = new GenerateCashSummary(requestParameters, reportDate, cashSummaryXml);
+                generateCashSummary.ExecuteNonQuery();
+                if (generateCashSummary.ReturnValue != 0)
+                {
+                    throw new Exception("Error in cash Summary generation");
+                }
+                logger.Warn.Write("End: Cash Summary Generation Process", requestParameters.Prameters);
+            }
+        }
+
+        private void CorporateAction(int ClientID, string ConnectionString, int BatchID, DataAccess.Get.PnlMasterInfo pnlMasterInfo, DateTime reportDate, RequestParameters requestParameters)
+        {
+            List<CorporateActionServiceRequestSet> productWiseAccountsData = new List<CorporateActionServiceRequestSet>();
+
+            productWiseAccountsData = pnlMasterInfo.PendingPnlList.Where(e => e.IsCorporateActionTobeExecute
+                                               && ((e.TableName == EnumRepository.PnlTable.data_generation && e.MaxPendingReportDate <= reportDate)
+                                               || (e.TableName == EnumRepository.PnlTable.CorporateAction && e.FromDate <= reportDate))
+                                               )
+              .GroupBy(e => e.ProdID)
+                .Select(e => new CorporateActionServiceRequestSet
+                {
+                    ProdID = e.Key == null ? 0 : Convert.ToInt32(e.Key),
+                    Accounts = string.Join(",", e.Select(k => k.AccountID).Distinct().ToList())
+                }).ToList();
+            
+            if (productWiseAccountsData.Any())
+            {
+                var CorporateActionCustomDetails = new { ProductCount = productWiseAccountsData.Count };
+                var CorporateActionSerializedcustomDetails = JsonConvert.SerializeObject(CorporateActionCustomDetails);
+                var CorporateActionOperationId = Guid.NewGuid();
+                var coporateAcitonStartTime = DateTime.UtcNow;
+                Logger.LogTraceMessage(ClientID, primaryOperationID, CorporateActionOperationId, BatchID, reportDate, $"START: Corporate Action Process", CorporateActionSerializedcustomDetails, coporateAcitonStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+                string corporateActionUrl = ApplicationConfig.CorporateActionServiceUrl;
+                if (serviceUrlsFromSystemInfo != null && serviceUrlsFromSystemInfo.Any())
+                {
+                    corporateActionUrl = serviceUrlsFromSystemInfo.FirstOrDefault(x => x.Name.Equals(CORPORATEACTIONSERVICEURL, StringComparison.InvariantCultureIgnoreCase))?.Value;
+                }
+                try
+                {
+                    var data = new
+                    {
+                        ClientID = ClientID,
+                        ConnectionString = ConnectionString.Replace(@"\", "||"),
+                        ReportDate = reportDate,
+                        ProductWiseAccountsdata = productWiseAccountsData,
+                        BatchID = BatchID,
+                        PrimaryOperationId = requestParameters.primaryOperationId
+                    };
+                    var jsondata = JsonConvert.SerializeObject(data);
+                    logger.Warn.Write("Starting Corporate Action Service Process.", requestParameters.Prameters);
+                    CallApi(jsondata, "corporateaction/PostRequestFromPnlService", corporateActionUrl);
+                    logger.Warn.Write("end Corporate Action Service Process.", requestParameters.Prameters);
+                }
+                catch (Exception ex)
+                {
+                    logger.Critical("Error in Corporate Action", requestParameters.Prameters, ex);
+                    Logger.LogErrorMessage(ClientID, ex.ToString(), "Error in Corporate Action Processing for ProdIds: " + string.Join(",", productWiseAccountsData.Select(item => item.ProdID).Distinct()), primaryOperationID, CorporateActionOperationId, reportDate, 1, BatchID, PNLSERVICE, logger, string.Join(",", productWiseAccountsData.SelectMany(x => x.Accounts)));
+                    throw;
+                }
+
+                Logger.LogTraceMessage(ClientID, primaryOperationID, CorporateActionOperationId, BatchID, reportDate, $"END: Corporate Action Process", CorporateActionSerializedcustomDetails, coporateAcitonStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+            }
+        }
+
+        private void CurrencyExchangeService(int clientID, string connectionString, DateTime reportDate, string xmlString, List<string> cashExchangeStrLst)
+        {
+            try
+            {
+                string currencyExchangeUrl = ApplicationConfig.CurrencyExchangeServiceUrl;
+                if (serviceUrlsFromSystemInfo != null && serviceUrlsFromSystemInfo.Any())
+                {
+                    currencyExchangeUrl = serviceUrlsFromSystemInfo.FirstOrDefault(x => x.Name.Equals(CURRENCYEXCHANGESERVICEURL, StringComparison.InvariantCultureIgnoreCase))?.Value;
+                }
+
+                var data = new
+                {
+                    ClientID = clientID,
+                    ConnectionString = connectionString.Replace(@"\", "||"),
+                    ReportDate = reportDate,
+                    XmlString = xmlString,
+                    primaryOperationID = requestParameters.primaryOperationId
+                };
+                var jsondata = JsonConvert.SerializeObject(data);
+                CallApi(jsondata, "currencyexchange", currencyExchangeUrl);
+            }
+            catch (Exception ex)
+            {
+                logger.Critical("Problem in Currency Exchange Status" + ex, requestParameters.Prameters);
+
+
+                string parametersString = string.Empty;
+                parametersString += "ReportDate" + " = " + reportDate.ToShortDateString() + "; " + Environment.NewLine;
+                parametersString += "ClientID" + " = " + Convert.ToString(requestParameters.Prameters["ClientID"]) + "; " + Environment.NewLine;
+                parametersString += "BatchID" + " = " + Convert.ToString(requestParameters.Prameters["BatchID"]) + "; " + Environment.NewLine;
+                parametersString += "Account-Product-Currency Pair(s): " + Environment.NewLine;
+
+                foreach (string str in cashExchangeStrLst)
+                {
+                    parametersString += str + Environment.NewLine;
+                }
+
+                throw new Common.Utilities.CustomException("Problem in Currency Exchange Status : " + ex.Message + Environment.NewLine + parametersString);
+            }
+        }
+
+        public List<List<int>> SplitList(List<int> allaccounts, int nSize)
+        {
+            var list = new List<List<int>>();
+            nSize = nSize == 0 ? 1 : nSize;
+            for (int i = 0; i < allaccounts.Count; i += nSize)
+            {
+                list.Add(allaccounts.GetRange(i, Math.Min(nSize, allaccounts.Count - i)));
+            }
+
+            return list;
+        }
+        public void ParallelProcess(bool isReExecute, DateTime reportDate, List<int> accountIdForExecution, PnlMasterInfo pnlMasterInfo, ResponseMsg response, object syncLock)
+        {
+            var logObject = new CommonLogInfo()
+            {
+                BatchID = requestParameters.batchID,
+                SubProcessName = "Parellel Process",
+                UserName = requestParameters.versionSource,
+                ProcessRunBy = requestParameters.versionSource,
+                GroupName = "",
+                EventName = $"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Parallel Process",
+                ProcessDate = reportDate,
+                ClientIDs = requestParameters.clientID.ToString(),
+                CallerApplication = requestParameters.callerApplication.ToString()
+            };
+            var parallelProcessOperationGuid = Guid.NewGuid();
+            bool isStrategyApplicable = false;
+            try
+            {
+
+                string accounts = string.Empty;
+                if (accountIdForExecution != null && accountIdForExecution.Any())
+                {
+                    accounts = String.Join(",", accountIdForExecution);
+                }
+                logObject.AccountIDs = accounts;
+
+                logger.Warn.Write("Starting ParallelProcess Process for report date " + reportDate.ToString() + " Accounts " + accounts, requestParameters.Prameters);
+
+                #region Bond Amortization Process
+                if (pnlMasterInfo.BondAmortizationModuleApplicable.FirstOrDefault().IsBondAmortizationModuleApplicable == 1)
+                {
+                    var bondAmortizationPnls = pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.BondAmortization, accountIdForExecution);
+
+                    if (bondAmortizationPnls != null && bondAmortizationPnls.Any())
+                    {
+                        var BondAmortizationOperationId = Guid.NewGuid();
+                        string BondAmortizationOperationName = "Bond Amortization Service Calling";
+                        DateTime BondAmortizationOperatioStartTime = DateTime.UtcNow;
+
+                        string bondAmortizationXML = PnlHelper.GetPnlXml(bondAmortizationPnls);
+
+                        DeleteBondAmortizationTrades deleteBondAmortizationTrades = new DeleteBondAmortizationTrades(requestParameters, requestParameters.connectionString, requestParameters.clientID, reportDate, bondAmortizationXML);
+                        deleteBondAmortizationTrades.ExecuteNonQuery();
+
+                        logger.Warn.Write("Start : Bond Amortization Service Calling ", requestParameters.Prameters);
+                        GenerateProcessID objGenerateProcessIdCex = GetProcessControlID(reportDate, "GENBA");
+
+                        BondAmortizationService(requestParameters.clientID, requestParameters.connectionString, reportDate, bondAmortizationXML);
+
+                        SetStatus((int)EnumRepository.ProcessName.BondAmortization, objGenerateProcessIdCex.ProcessControlID);
+
+                        logger.Warn.Write("End : Bond Amortization Service Calling ", requestParameters.Prameters);
+                        #region Kafka logging
+                        var BondAmortizationCustomDetails = new { BondAmortizationXML = bondAmortizationXML };
+                        var BondAmortizationSerializedcustomDetails = JsonConvert.SerializeObject(BondAmortizationCustomDetails);
+                        Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, BondAmortizationOperationId, requestParameters.batchID, reportDate, BondAmortizationOperationName, BondAmortizationSerializedcustomDetails, BondAmortizationOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+                        #endregion
+                    }
+                }
+                #endregion
+
+
+                var cache = new Cache();
+                cache.Accounts = pnlMasterInfo.AccountList;
+                cache.AccountIds = accountIdForExecution;
+                cache.IsDecouplingEnabledForClient = isDecoupledMasterApplicable;
+                cache.PrimaryOperationId = primaryOperationID;
+                cache.OperationId = parallelProcessOperationGuid;
+
+                monthFinancialYearStartsOn = (int)cache.Accounts[0]?.MonthFinancialYearStartsOn;
+                yearEndDate = DateTimeUtil.CalculateYearEndDate(reportDate, monthFinancialYearStartsOn, pnlMasterInfo.HolidayList.Select(x => x.HolidayDate).ToList());
+
+                var pnsProcessPnls = pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.PairingAndPositionGenration, accountIdForExecution);
+
+                if (!pnsProcessPnls.IsNullOrEmpty())
+                {
+
+                    string pnsXML = PnlHelper.GetPnlXml(pnsProcessPnls);
+                    List<string> pnsStrLst = PnlHelper.GetPnlString(pnsProcessPnls);
+
+                    string PNSProcessOperationName = "Generate All Dates";
+                    DateTime PNSProcessOperatioStartTime = DateTime.UtcNow;
+                    var SerializeCustomDetailsObject = JsonConvert.SerializeObject(new { PnsProcessPnlCount = pnsProcessPnls.Count });
+                    if (requestParameters.callerApplication == EnumRepository.CallerApplication.MAIN2)
+                    {
+                        logger.Warn.Write("Starting All Dates Generation", requestParameters.Prameters);
+
+                        GenerateAllDates(pnsXML, reportDate, requestParameters);
+                        Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, parallelProcessOperationGuid, requestParameters.batchID, reportDate, $"{ PNSProcessOperationName}", SerializeCustomDetailsObject, PNSProcessOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+                        logger.Warn.Write("completed.All Dates Generation", requestParameters.Prameters);
+
+                        //          logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Generate All Dates{guid}", "End", $"Pns XML:{pnsXML};", commonLog, "Generate All Dates");
+                    }
+
+                    var pns = new Pns(logger, syncLock, lstOfProdIdsWithReportdate, pnlMasterInfo.SecurityLevelServiceCheck, yearEndDate, null, 0, ApplicationConfig.MasterConnectionString);
+
+                    //         logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} PNL Process Before OA Module:{guid}", "Start", $"Pns XML:{pnsXML};", commonLog, "PNL Process Before OA Module");
+
+                    pns.Process(requestParameters, reportDate, pnsXML, pnlMasterInfo, response, cache, pnsStrLst, "PNL Process Before OA Module", ref isStrategyApplicable);
+
+                }
+
+
+                string oaOperationName = "Process Option Assignment";
+                DateTime oaOperatioStartTime = DateTime.UtcNow;
+                // Start 'OA Process' logging.
+                OptionAssignment OA = new OptionAssignment(requestParameters, reportDate
+                                                            , pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.OptionAssignment
+                                                            , accountIdForExecution), pnlMasterInfo, logger, cache, isDecoupledMasterApplicable);
+                OA.Process();
+                Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, parallelProcessOperationGuid, requestParameters.batchID, reportDate, $"{ oaOperationName }", string.Empty, oaOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+
+                // if there are some trades which are generated because of option assignment then pns process should be executed again for those trades.
+                if (!String.IsNullOrEmpty(OA.outXmlString))
+                {
+                    cache.Delete(OA.outXmlString);
+
+                    Pns pns = new Pns(logger, syncLock, lstOfProdIdsWithReportdate, pnlMasterInfo.SecurityLevelServiceCheck, yearEndDate, null, 0, ApplicationConfig.MasterConnectionString);
+                    logger.Warn.Write("Starting pns process after OA.", requestParameters.Prameters);
+                    pns.Process(requestParameters, reportDate, OA.outXmlString, pnlMasterInfo, response, cache, OA.lstAccProdCurrency, "PNL Process After OA Module", ref isStrategyApplicable);
+                    logger.Warn.Write("completed. pns process after OA.", requestParameters.Prameters);
+
+                    // End 'PNS Process After OA Module' logging.
+                    //         logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} PNS Process After OA Module:{guid}", "End", "", commonLog, "PNS Process After OA Module");
+                }
+                if (requestParameters.callerApplication == EnumRepository.CallerApplication.MAIN2)
+                {
+
+                    var data = pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.LoanInterestService, accountIdForExecution);
+
+                    if (data.Any())
+                    {
+                        string LoanInterestOperationName = "Loan Interest Process";
+                        DateTime LoanInterestOperatioStartTime = DateTime.UtcNow;
+
+                        string pendingXml = PnlHelper.GetPnlXml(data);
+
+                        logger.Warn.Write("Start :Loan Interest Service Calling ", requestParameters.Prameters);
+
+                        GenerateProcessID procID = GetProcessControlID(reportDate, "GENLIN");
+                        Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, parallelProcessOperationGuid, requestParameters.batchID, reportDate, $"START: {LoanInterestOperationName}", JsonConvert.SerializeObject(new { PendingXmlCount = data.Count }), LoanInterestOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty, requestParameters.versionSource);
+                        //         logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Loan Interest Service:{guid}", "Start", $"XML:{pendingXml}", commonLog, "Loan Interest Service");
+                        requestStartTime = DateTime.UtcNow;
+                        LoanInterestService(requestParameters.clientID, requestParameters.connectionString, reportDate, pendingXml);
+                        Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, parallelProcessOperationGuid, requestParameters.batchID, reportDate, $"END: {LoanInterestOperationName}", JsonConvert.SerializeObject(new { PendingXmlCount = data.Count }), LoanInterestOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty, requestParameters.versionSource);
+                        SetStatus((int)EnumRepository.ProcessName.LoanInterestService, procID.ProcessControlID);
+                        logger.Warn.Write("End :Loan Interest Service Calling ", requestParameters.Prameters);
+
+                    }
+
+                    List<PnlData> interestSLMPNLData = pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.InterestCalculation, accountIdForExecution);
+                    string interestXml = PnlHelper.GetPnlXml(interestSLMPNLData);
+                    string InterestSLMOperationName = "Interest SLM Service Process";
+                    DateTime InterestSLMOperatioStartTime = DateTime.UtcNow;
+                    if (interestSLMPNLData != null && interestSLMPNLData.Any() && !String.IsNullOrEmpty(interestXml))
+                    {
+                        // Start 'Interest SLM Service Call' logging.
+                        //       logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Interest SLM Service Call:{guid}", "Start", $"ClientID:{requestParameters.clientID}; ConnectionString:{requestParameters.connectionString}; ReportDate:{reportDate}; InterestXML:{interestXml}", commonLog, "Interest SLM Service Call");
+
+                        logger.Debug.Write("Starting Interest SLM Service Call.", requestParameters.Prameters);
+                        GenerateProcessID objGenerateProcessIdIns = GetProcessControlID(reportDate, "GENINS");
+                        Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, parallelProcessOperationGuid, requestParameters.batchID, reportDate, $"START: { InterestSLMOperationName}", JsonConvert.SerializeObject(new { InterestSLMPnlCount = interestSLMPNLData.Count }), InterestSLMOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty, requestParameters.versionSource);
+                        string pendingPnsXml = string.Empty;
+                        pendingPnsXml = InterestSLMService(requestParameters.clientID, requestParameters.connectionString, reportDate, interestXml);
+                        Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, parallelProcessOperationGuid, requestParameters.batchID, reportDate, $"END: { InterestSLMOperationName}", string.Empty, InterestSLMOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty, requestParameters.versionSource);
+
+                        // End 'Interest SLM Service Call' logging.
+                        //    logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Interest SLM Service Call:{guid}", "End", $"ClientID:{requestParameters.clientID}; ConnectionString:{requestParameters.connectionString}; ReportDate:{reportDate}; InterestXML:{interestXml}", commonLog, "Interest SLM Service Call");
+
+                        List<string> interestSLMPNSStrLst = new List<string>();
+
+                        if (!string.IsNullOrEmpty(pendingPnsXml))
+                        {
+                            interestSLMPNSStrLst = PnlHelper.GetStringListFromXML(pendingPnsXml);
+                        }
+
+                        if (!String.IsNullOrEmpty(pendingPnsXml))
+                        {
+                            cache.Delete(pendingPnsXml);
+                            Pns pns = new Pns(logger, syncLock, lstOfProdIdsWithReportdate, pnlMasterInfo.SecurityLevelServiceCheck, yearEndDate, null, 0, ApplicationConfig.MasterConnectionString);
+                            logger.Warn.Write("Starting pns process after InterestSLM.", requestParameters.Prameters);
+
+                            // Start 'Interest SLM Service Call' logging.
+                            //      logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} PNS process after Interest SLM:{guid}", "Start", $"InterestSLMPNSList:{String.Join(",", interestSLMPNSStrLst)}", commonLog, "PNS process after Interest SLM");
+
+                            pns.Process(requestParameters, reportDate, pendingPnsXml, pnlMasterInfo, response, cache, interestSLMPNSStrLst, "PNL Process After Interest SLM Module", ref isStrategyApplicable);
+
+                            // End 'Interest SLM Service Call' logging.
+                            //       logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} PNS process after Interest SLM:{guid}", "End", $"InterestSLMPNSList:{String.Join(",", interestSLMPNSStrLst)}", commonLog, "PNS process after Interest SLM");
+
+                            logger.Warn.Write("completed. pns process after Interest SLM.", requestParameters.Prameters);
+
+                        }
+                        SetStatus((int)EnumRepository.ProcessName.InterestSLM, objGenerateProcessIdIns.ProcessControlID);
+                        logger.Debug.Write("End Interest SLM Service Call.", requestParameters.Prameters);
+                    }
+                    var cashExchangePnls = pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.CurrencyCashExchange, accountIdForExecution);
+
+                    if (!cashExchangePnls.IsNullOrEmpty())
+                    {
+                        string CurrencyExchangeOperationName = "Currency Cash Exchange Service Calling";
+                        DateTime CurrencyExchangeOperatioStartTime = DateTime.UtcNow;
+
+                        string cashExchangeXML = PnlHelper.GetPnlXml(cashExchangePnls);
+                        List<string> cashExchangeStrLst = PnlHelper.GetPnlString(cashExchangePnls);
+                        var cashExchangeCount = cashExchangePnls != null ? cashExchangePnls.Count : 0;
+                        logger.Warn.Write("Start :Currency Cash Exchange Service Calling ", requestParameters.Prameters);
+                        GenerateProcessID objGenerateProcessIdCex = GetProcessControlID(reportDate, "GENCEX");
+                        Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, parallelProcessOperationGuid, requestParameters.batchID, reportDate, $"START: { CurrencyExchangeOperationName}", JsonConvert.SerializeObject(new { CashExchangeCount = cashExchangeCount }), CurrencyExchangeOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty, requestParameters.versionSource);
+
+
+                        //      logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Currency Exchange Service:{guid}", "Start", $"cashExchangeXML:{cashExchangeXML}", commonLog, "Currency Exchange Service");
+
+                        CurrencyExchangeService(requestParameters.clientID, requestParameters.connectionString, reportDate, cashExchangeXML, cashExchangeStrLst);
+                        Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, parallelProcessOperationGuid, requestParameters.batchID, reportDate, $"END: { CurrencyExchangeOperationName}", string.Empty, CurrencyExchangeOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty, requestParameters.versionSource);
+
+                        SetStatus((int)EnumRepository.ProcessName.CurrencyExchangeService, objGenerateProcessIdCex.ProcessControlID);
+
+
+                        //      logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Currency Exchange Service:{guid}", "End", $"cashExchangeXML:{cashExchangeXML}", commonLog, "Currency Exchange Service");
+
+                        logger.Warn.Write("End :Currency Cash Exchange Service Calling ", requestParameters.Prameters);
+                    }
+                }
+
+
+                //       logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Dividend Generation Process:{guid}", "Start", "", commonLog, "Dividend Generation Process");
+
+                // call dividend generation process
+                Dividend objDividend = new Dividend(requestParameters, reportDate, pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.DividendCalculation, accountIdForExecution), cache,pnlMasterInfo.MaxPendingPnsID, isDecoupledMasterApplicable);
+
+                objDividend.Process();
+
+                //         logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Dividend Generation Process:{guid}", "End", "", commonLog, "Dividend Generation Process");
+                //        logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Interest Generation Process:{guid}", "Start", "", commonLog, "Dividend Generation Process");
+
+                // call interest generation process
+                Interest objInterest = new Interest(requestParameters, reportDate, pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.InterestCalculation, accountIdForExecution), cache, isDecoupledMasterApplicable);
+
+                objInterest.Process();
+
+                //        logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Interest Generation Process:{guid}", "End", "", commonLog, "Interest Generation Process");
+                //         logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Recon Process:{guid}", "Start", "", commonLog, "Recon Process");
+
+                string ReconOperationName = "Overall Recon Process";
+                DateTime ReconOperatioStartTime = DateTime.UtcNow;
+
+                if (!pnlMasterInfo.IsReconProcessExcluded)
+                {
+                    ReconFromPnl recon = new ReconFromPnl(requestParameters, reportDate, pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.Recon, accountIdForExecution), pnlMasterInfo, logger, isReExecute, isDecoupledMasterApplicable);
+
+                    recon.Process(primaryOperationID);
+
+                    if (recon.lstAutoSettleErrorProcessAccounts != null && recon.lstAutoSettleErrorProcessAccounts.Count() > 0)
+                    {
+                        foreach (AffectedItemsForAutoSettleError settleItemAcc in recon.lstAutoSettleErrorProcessAccounts)
+                        {
+                            this.cbAutoSettleErrorProcessAccounts.Add(settleItemAcc);
+                        }
+                    }
+
+                    //     logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Recon Process:{guid}", "End", "", commonLog, "Recon Process");
+                    #region Kafka logging
+                    Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, parallelProcessOperationGuid, requestParameters.batchID, reportDate, ReconOperationName, string.Empty, ReconOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+                    #endregion
+                }
+
+                string BalanceOperationName = "Overall Balance Process";
+                DateTime BalanceOperatioStartTime = DateTime.UtcNow;
+
+                //      logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Balance Process:{guid}", "Start", "", commonLog, "Balance Process");
+
+                Balance balance = new Balance(requestParameters, reportDate, pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.BalanceGeneration, accountIdForExecution), pnlMasterInfo,
+                                                pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.PairingAndPositionGenration, accountIdForExecution), logger);
+
+                balance.Process(cache);
+
+                //     logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Balance Process:{guid}", "End", "", commonLog, "Balance Process");
+
+
+                //     logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Broker Balance Generation:{guid}", "Start", "", commonLog, "Broker Balance Generation");
+
+                BrokerBalance brokerBalanceGen = new BrokerBalance(requestParameters, reportDate, pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.BrokerBalanceGeneration, accountIdForExecution),
+                                                            pnlMasterInfo, logger);
+
+                brokerBalanceGen.Process();
+
+                //         logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Broker Balance Generation:{guid}", "End", "", commonLog, "Broker Balance Generation");
+
+                #region Kafka logging
+                Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, parallelProcessOperationGuid, requestParameters.batchID, reportDate, BalanceOperationName, JsonConvert.SerializeObject(new { AccIdCount = accountIdForExecution.Count }), BalanceOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+                #endregion
+
+                //      logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Generate Cash Summary:{guid}", "Start", "", commonLog, "Generate Cash Summary");
+
+                GenerateCashSummary(reportDate, accountIdForExecution);
+
+                //     logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Generate Cash Summary:{guid}", "End", "", commonLog, "Generate Cash Summary");
+
+                if (pnlStorage.GetPnls(reportDate, EnumRepository.ProcessName.GainGeneration, accountIdForExecution).Count > 0)
+                {
+                    string GainOperationName = "Overall Gain Process";
+                    DateTime GainOperatioStartTime = DateTime.UtcNow;
+
+                    //       logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Gain Process:{guid}", "Start", "", commonLog, "Gain Process");
+
+                    Gain gain;
+
+                    if (requestParameters.callerApplication == EnumRepository.CallerApplication.MAIN2)
+                    {
+                        gain = new GainMain2(logger, requestParameters, reportDate, pnlStorage, cache, pnlMasterInfo, isStrategyApplicable);
+                    }
+                    else
+                    {
+                        gain = new GainMain(logger, requestParameters, reportDate, pnlStorage, cache, pnlMasterInfo);
+                    }
+
+                    gain.Process();
+
+                    //      logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Gain Process:{guid}", "End", "", commonLog, "Gain Process");
+
+                    #region Kafka logging
+                    Logger.LogTraceMessage(requestParameters.clientID, primaryOperationID, parallelProcessOperationGuid, requestParameters.batchID, reportDate, GainOperationName, string.Empty, GainOperatioStartTime, DateTime.UtcNow, PNLSERVICE, logger, string.Empty);
+                    #endregion
+                }
+
+                logger.Warn.Write("end Corporate Action Service Process.", requestParameters.Prameters);
+
+                logger.Warn.Write("Finish ParallelProcess Process for report date " + reportDate.ToString() + " Accounts " + accounts, requestParameters.Prameters);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogErrorMessage(requestParameters.clientID, ex.ToString(), "Error in Parallel Process", primaryOperationID, Guid.NewGuid(), DateTime.UtcNow.AddDays(-1), 2, requestParameters.batchID, PNLSERVICE, logger, accIDs);
+                throw;
+            }
+            finally
+            {
+                //         logObject.Logger($"Thread:{System.Threading.Thread.CurrentThread.ManagedThreadId} Parallel Process:{guid}", "End", "", commonLog, "Parellel Process");
+            }
+
+
+        }
+        private void DeleteInterestSLM(DateTime reportDate, string xmlString, RequestParameters requestParameters, List<PnlData> interestPnlData)
+        {
+            if (!string.IsNullOrEmpty(xmlString) && requestParameters.callerApplication == EnumRepository.CallerApplication.MAIN2)
+            {
+                if (isDecoupledMasterApplicable)
+                {
+                    string productsXml = string.Empty, productTypesXml = string.Empty, systemInfoXml = string.Empty;
+                    if (interestPnlData != null && interestPnlData.Any())
+                    {
+                        List<int?> prodIds = null;
+                        var interestPnls = interestPnlData.Where(x => x.ProdID != null);
+                        if (interestPnls != null && interestPnls.Any())
+                        {
+                            prodIds = interestPnls.Select(x => x.ProdID).ToList();
+                        }
+                        else
+                        {
+                            InterestSLMData interestSLMData = new InterestSLMData();
+                            var currIds = string.Join(",", interestPnlData.Where(x => x.CurrID > 0).Select(x => x.CurrID));
+                            var accIds = string.Join(",", interestPnlData.Where(x => x.AccountID > 0).Select(x => x.AccountID));
+                            prodIds = interestSLMData.GetInterestSLMTradeProductIds(requestParameters.connectionString, reportDate, accIds, currIds);
+                        }
+
+                        ProductServiceClient productServiceClient = new ProductServiceClient(ApplicationConfig.Main2MastersAPIURL);
+                        var productsTask = (prodIds != null && prodIds.Any()) ? productServiceClient.GetProductMasterDataAsync(string.Join(",", prodIds), requestParameters.clientID, requestParameters.connectionString) : null;
+                        var systemInformationTask = entityConfigClient.GetSystemInformationDataAsync("ADJUSTMENTCODE");
+                        Task.WaitAll(productsTask ?? Task.CompletedTask, systemInformationTask);
+                        if (productsTask != null && productsTask.Result != null && productsTask.Result.Any())
+                        {
+                            productsXml = productsTask.Result.ToList().ToXml();
+                            var productTypes = productServiceClient.GetProductTypesAsync(string.Join(",", productsTask.Result.Select(x => x.ProdType))).ConfigureAwait(false).GetAwaiter().GetResult();
+                            productTypesXml = productTypes.ToList().ToXml();
+                        }
+
+                        systemInfoXml = systemInformationTask.Result.ToList().ToXml();
+                    }
+
+                    CleanInterestSLMTrades deleteInterestSLMTrades = new CleanInterestSLMTrades(requestParameters, reportDate, xmlString, productsXml, productTypesXml, systemInfoXml);
+                    deleteInterestSLMTrades.ExecuteNonQuery();
+                    if (deleteInterestSLMTrades != null && deleteInterestSLMTrades.returnValue != 0)
+                    {
+                        throw new Common.Utilities.CustomException("Problem in delete interest slm trades.");
+                    }
+                }
+                else
+                {
+                    DeleteInterestSLMTrades deleteInterestSLMTrades = new DeleteInterestSLMTrades(requestParameters, reportDate, xmlString);
+                    deleteInterestSLMTrades.ExecuteNonQuery();
+                    if (deleteInterestSLMTrades != null && deleteInterestSLMTrades.returnValue != 0)
+                    {
+                        throw new Common.Utilities.CustomException("Problem in delete interest slm trades.");
+                    }
+                }
+            }
+        }
+
+        private string InterestSLMService(int clientID, string connectionString, DateTime reportDate, string xmlString)
+        {
+            string returnString = string.Empty;
+            string interestSLMServiceUrl = ApplicationConfig.InterestSLMServiceUrl;
+            try
+            {
+                if (entityConfigClient != null)
+                {
+                    var entityConfig = entityConfigClient.GetClientEntityConfigurationData(INTERESTSLMCONFIG, clientID);
+                    if (entityConfig == null || !entityConfig.Any(x => reportDate >= x.ValidFrom && reportDate <= x.ValidTo))
+                    {
+                        return returnString;
+                    }
+                }
+
+                if (serviceUrlsFromSystemInfo != null && serviceUrlsFromSystemInfo.Any())
+                {
+                    interestSLMServiceUrl = serviceUrlsFromSystemInfo.FirstOrDefault(x => x.Name.Equals(INTERESTSLMSERVICEURL, StringComparison.InvariantCultureIgnoreCase))?.Value;
+                }
+
+                var data = new
+                {
+                    ClientID = clientID,
+                    ConnectionString = connectionString.Replace(@"\", "||"),
+                    ReportDate = reportDate,
+                    XmlString = xmlString,
+                    primaryOperationID = requestParameters.primaryOperationId
+                };
+                var jsondata = JsonConvert.SerializeObject(data);
+                returnString = CallApi(jsondata, "InterestSLM", interestSLMServiceUrl);
+            }
+            catch (Exception ex)
+            {
+                logger.Critical("Problem in Interest SLM" + ex, requestParameters.Prameters);
+                throw new Common.Utilities.CustomException("Problem in Interest SLM :" + ex.ToString());
+            }
+            return returnString;
+        }
+
+        private void BondAmortizationService(int clientID, string connectionString, DateTime reportDate, string xmlString)
+        {
+            try
+            {
+                var data = new
+                {
+                    ClientID = clientID,
+                    ConnectionString = connectionString,
+                    ReportDate = reportDate,
+                    XmlString = xmlString
+                };
+                var jsondata = JsonConvert.SerializeObject(data);
+                GetBondAmortizationApiURL bondAmortizeServiceURL = new GetBondAmortizationApiURL(requestParameters, clientID, ApplicationConfig.MasterConnectionString);
+                bondAmortizeServiceURL.ExecuteDataSet();
+                CallApi(jsondata, "BondAmortization", bondAmortizeServiceURL.BondAmortizationServiceURL);
+            }
+            catch (Exception ex)
+            {
+                logger.Critical("Problem in Bond Amortization " + ex, requestParameters.Prameters);
+                throw new Common.Utilities.CustomException("Problem in Bond Amortization :" + ex.Message);
+            }
+        }
+
+        private void LoanInterestService(int clientID, string connectionString, DateTime reportDate, string xmlString)
+        {
+            try
+            {
+                string loanInterestUrl = ApplicationConfig.LoanInterestServiceUrl;
+                if (serviceUrlsFromSystemInfo != null && serviceUrlsFromSystemInfo.Any())
+                {
+                    loanInterestUrl = serviceUrlsFromSystemInfo.FirstOrDefault(x => x.Name.Equals(LOANINTERESTSERVICEURL, StringComparison.InvariantCultureIgnoreCase))?.Value;
+                }
+
+                var data = new
+                {
+                    ClientID = clientID,
+                    ConnectionString = connectionString.Replace(@"\", "||"),
+                    ReportDate = reportDate,
+                    XmlString = xmlString,
+                    primaryOperationID = requestParameters.primaryOperationId
+                };
+                var jsondata = JsonConvert.SerializeObject(data);
+                CallApi(jsondata, "LoanInterest", loanInterestUrl);
+            }
+            catch (Exception ex)
+            {
+                logger.Critical("Problem in Loan Interest " + ex, requestParameters.Prameters);
+                throw new Common.Utilities.CustomException("Problem in Loan Interest :" + ex.Message);
+            }
+        }
+
+        private void CalculateChecks(DateTime sucessfullDate, long maxPendingPnsID, int eff)
+        {
+            if (ChecksOnService)
+            {
+                logger.Warn.Write("starting check Processing to date " + sucessfullDate.ToShortDateString(), requestParameters.Prameters);
+                if (isDecoupledMasterApplicable)
+                {
+                    new ManageSignoffData(requestParameters, sucessfullDate, accIDs, accountsNeedToBeExecuted, currID, eff, maxPendingPnsID, prodIDs, logger).Process(string.Empty, isDecoupledMasterApplicable);
+                }
+                else
+                {
+                    ManageSignoffData.Process(requestParameters, sucessfullDate, accIDs, accountsNeedToBeExecuted, currID, eff, maxPendingPnsID, prodIDs, logger);
+                }
+                logger.Warn.Write("finish check Processing report date " + sucessfullDate.ToShortDateString(), requestParameters.Prameters);
+            }
+        }
+
+
+        private int GenerateAllDates(string xmlString, DateTime reportDate, RequestParameters requestParameteres)
+        {
+            GenerateAllDates result;
+            if (!isDecoupledMasterApplicable)
+            {
+                GenerateAllDates generateDates = new GenerateAllDates(requestParameteres, reportDate, xmlString);
+                generateDates.ExecuteDataSet();
+                result = generateDates;
+            }
+            else
+            {
+                ClientServiceClient clientServiceClient = new ClientServiceClient(ApplicationConfig.Main2MastersAPIURL);
+                var clientData = clientServiceClient.GetClientMasterData(requestParameteres.clientID.ToString());
+                GenerateAllDates generateDates = new CreateAllDates(requestParameteres, reportDate, xmlString, clientData.First().BrokerId);
+                generateDates.ExecuteDataSet();
+                result = generateDates;
+            }
+
+            if (result == null || result.ReturnValue != 0)
+            {
+                throw new Common.Utilities.CustomException("There in some problem in generate data in all date process");
+            }
+            return result.ReturnValue;
+        }
+
+        public string CallApi(string jsondata, string serviceName, string url)
+        {
+            string returnString;
+
+            using (var client = new RetryableHttpClient(LogServiceRetryErrors, 3600))
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, CreateApiUrl(serviceName, url));
+                request.Content = new StringContent(jsondata, Encoding.UTF8, "application/json");
+                var response = client.SendAsync(request).ConfigureAwait(false).GetAwaiter().GetResult();
+                returnString = response.Content.ReadAsStringAsync().Result;
+                if (response.StatusCode != System.Net.HttpStatusCode.OK)
+                {
+                    var errorMessage = response.Content.ReadAsStringAsync();
+                    throw new Common.Utilities.CustomException(errorMessage.Result + ",Problem in" + serviceName);
+                }
+            }
+
+            return returnString;
+        }
+
+        private void LogServiceRetryErrors(Exception ex, string requestUrl, int retryCount)
+        {
+            Logger.LogErrorMessage(requestParameters.clientID, "Retry Count: " + retryCount + ex, "Error in calling service from PNL " + requestUrl, primaryOperationID, Guid.NewGuid(), this.fromDate, 2, requestParameters.batchID, PNLSERVICE, logger, string.Empty);
+        }
+
+        public static string CreateApiUrl(string serviceName, string url)
+        {
+            if (!string.IsNullOrEmpty(url))
+            {
+                url = url.Trim();
+                if (url.EndsWith("/"))
+                {
+                    url = url + serviceName;
+                }
+                else
+                {
+                    url = url + "/" + serviceName;
+                }
+            }
+
+            return url;
+        }
+
+        private GenerateProcessID GetProcessControlID(DateTime reportDate, String processName)
+        {
+            GenerateProcessID result;
+            if (!isDecoupledMasterApplicable)
+            {
+                GenerateProcessID objGenerateModuleProcessID = new GenerateProcessID(requestParameters, reportDate, processName);
+                objGenerateModuleProcessID.ExecuteNonQuery();
+                result = objGenerateModuleProcessID;
+            }
+            else
+            {
+                InsertProcessControlID objGenerateModuleProcessID = new InsertProcessControlID(requestParameters, reportDate, processName);
+                objGenerateModuleProcessID.ExecuteNonQuery();
+                result = objGenerateModuleProcessID;
+            }
+            return result;
+        }
+
+        private void SetStatus(int processCode, int processControlID)
+        {
+            SetStatusAndClearModuleTempData objSetStatus = new SetStatusAndClearModuleTempData(requestParameters, processCode, processControlID, -1);
+            objSetStatus.ExecuteNonQuery();
+        }
+    }
+
+    public class FactoredTradesRequestSet
+    {
+        public int ClientID { get; set; }
+        public DateTime ReportDate { get; set; }
+        public int BatchID { get; set; }
+        public string ConnectionString { get; set; }
+        public List<PendingPnl> PendingPnlList { get; set; }
+        public List<Holiday> HolidayList { get; set; }
+        public Guid PrimaryOperationID { get; set; }
+
+    }
+
+    public class CorporateActionServiceRequestSet
+    {
+        public int ProdID { get; set; }
+        public string Accounts { get; set; }
+    }
+
+    public class TaskQueue
+    {
+        private Task previousTask = Task.FromResult(true);
+        private object key = new object();
+
+        public Task QueueTask(Action action)
+        {
+            lock (key)
+            {
+                previousTask = previousTask.ContinueWith(
+                  t => action(),
+                  CancellationToken.None,
+                  TaskContinuationOptions.None,
+                  TaskScheduler.Default);
+                return previousTask;
+            }
+        }
+
+        public Task<T> QueueTask<T>(Func<T> work)
+        {
+            lock (key)
+            {
+                var task = previousTask.ContinueWith(
+                  t => work(),
+                  CancellationToken.None,
+                  TaskContinuationOptions.None,
+                  TaskScheduler.Default);
+                previousTask = task;
+                return task;
+            }
+        }
+    }
+
+}
