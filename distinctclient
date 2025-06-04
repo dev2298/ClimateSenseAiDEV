@@ -1,0 +1,56 @@
+using NAV.Common.Attributes;
+using Nav.FactoredTradeService.Data;
+using NAV.Data;
+using NAV.PNL.Data.Common;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Linq;
+
+namespace Nav.FactoredTradeService.DAL
+{
+    public class GetProductsUsedInClient : StoreProcedure
+    {
+        //Data Sets required to Copy Master level pricing factor into Client
+      
+        public Dictionary<int, List<ClientProducts>> _dictClientAccountProductsList { get; set; }
+
+        //Sets end here
+
+        [Parameter("@reportDate", SqlDbType.Date, ParameterDirection.Input)]
+        public DateTime ReportDate { get; set; }
+
+        [Parameter("@accountIDs", SqlDbType.NVarChar, ParameterDirection.Input)]
+        public string AccountIDs { get; set; }
+
+        [Parameter("@clientID ", SqlDbType.Int, ParameterDirection.Input)]
+        public int ClientID { get; set; }
+
+       
+        private GetProductsUsedInClient(string connectionString, int clientID, DateTime reporDate, string accountIDs,
+            string logFolderName, RequestParameters req) : base(connectionString, "GetProductsUsedInClient", logFolderName, req)
+        {
+            ReportDate = reporDate;
+            AccountIDs = accountIDs;
+            ClientID = clientID;
+        }
+
+        protected override void ReadResultSets(IDataReader dr)
+        {
+            List<ClientProducts> clientAccountProductsList = DbReader<ClientProducts>(dr);
+
+            _dictClientAccountProductsList = clientAccountProductsList.GroupBy(c => c.AccountID)
+             .ToDictionary(k => k.Key, v => v.Select(f => f).ToList());
+        }
+        //Static Factory method
+        public static GetProductsUsedInClient CreateObject(string connectionString, int clientID, DateTime reporDate, string accountIDs, 
+            string logFolderName, RequestParameters req)
+        {
+            var obj = new GetProductsUsedInClient(connectionString, clientID, reporDate, accountIDs, logFolderName, req);
+            obj.ExecuteDataSet();
+            return obj;
+        }
+      
+    }
+
+}
