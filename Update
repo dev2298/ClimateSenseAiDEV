@@ -1,0 +1,51 @@
+// … right after your Parallel.ForEach(...) has closed …
+
+// (A) Grab the "method‐choice" string you used earlier when creating FactoredTrades.
+//     In your repository, this was pulled from _clientSettings, e.g.:
+string factoredTradeMethodSetting =
+    Convert.ToString(_clientSettings
+        .Where(x => x.EntityProcessConfigType == EntityProcesses.FACTORTRADEMETHOD.ToString())
+        .FirstOrDefault()?.ProcessTypeValue);
+
+// (B) Prepare a factory to build IFactoredTradeMethods (which, when FACTORTRADEMETHOD == "HundredTradePrice",
+//     will give you back a HundredTradePrice instance under the hood):
+FactoredTradesFactory methodFactory = new ConcreteFactoredTradesFactory();
+
+// (C) Now drain the queue of all (accountID, prodID) pairs:
+foreach (var (accId, prodId) in AutoGenQueue.Snapshot())
+{
+    // (1) Re-fetch exactly the same "clientPricingFactors" list for this prodId:
+    //     (This is how factoredTradeMethod would have gotten its PricingFactorData originally.)
+    List<PricingFactorData> clientPricingFactors =
+        GetClientPricingFactors
+            .FetchClientPricingFactors(
+                _reqParamater,                   // e.g. your RequestParameters
+                new List<int> { prodId },       // single‐element list: [ prodId ]
+                _reportDate,                    // same reportDate
+                _clientBrokerMapping            // same broker mapping used earlier
+            );
+
+    // (2) Build a new IFactoredTradeMethods. When your setting is "HundredTradePrice", this ends up as:
+    //     new HundredTradePrice(logger, clientPricingFactors, _clientSettings, _reportDate,
+    //                            prodId, accId, _pendingPnlList, _folderName, _reqParamater);
+    IFactoredTradeMethods tradeMethod =
+        methodFactory.GetFactoredTradeMethod(
+            factoredTradeMethodSetting,
+            logger,               // your ILog instance ("FactoredTrades")
+            clientPricingFactors, // just built above (for this one prodId)
+            _clientSettings,      // same list<EntityProcessConfiguration> you passed earlier
+            _reportDate,
+            prodId,
+            accId,
+            _pendingPnlList,      // same pending‐PNL list
+            _folderName,
+            _reqParamater
+        );
+
+    // (3) Invoke the exact Same parameterless SetAutoGeneratePosition() that HundredTradePrice used:
+    tradeMethod.SetAutoGeneratePosition();
+
+    // (Optional) If you also want to re‐enqueue into the queue, you could do:
+    // AutoGenQueue.Enqueue(accId, prodId);
+    // … but normally you only do that if some later stage needs it again.
+}
