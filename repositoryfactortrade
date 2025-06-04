@@ -1,0 +1,557 @@
+using NAV.Common.Logging;
+using Nav.FactoredTradeService.BusinessLogic;
+using Nav.FactoredTradeService.Data;
+using Nav.FactoredTradeService.DAL;
+using NAV.PNL.Data.Common;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using NAV.Common.Data;
+using Nav.FactoredTradeService.Utilities;
+using Newtonsoft.Json;
+using NAV.MasterServiceClient;
+using NavFactoredServiceDeployment.DAL;
+using NAVCommon;
+using NAV.Common.Extensions;
+using NavFactoredServiceDeployment.BusinessLogic;
+using System.ServiceModel;
+using System.Threading.Tasks;
+using System.Configuration;
+
+
+namespace Nav.FactoredTradeService.Repository
+{
+    public class FactoredTradesRepository
+    {
+        #region varibles and datasets
+
+        string _folderName = default;
+        RequestParameters _reqParamater;
+        int _batchID = default;
+        GetMasterDataForPricingFactors _getMasterDataForFactoredTrades;
+        FetchMasterDataForPricingFactors _fetchMasterDataForFactoredTrades;
+        public List<EntityProcessConfiguration> _clientSettings { get; set; }
+        public List<ClientBrokerMappingForPRCFactor> _clientBrokerMapping { get; set; }
+        DateTime _reportDate = default;
+        List<PendingPnl> _pendingPnlList;
+        public Guid primaryOperationId;
+
+        ILogger logger = Log4NetService.Instance.GetLogger("FactoredTrades");
+        EntityConfigClient entityConfigClient = null;
+        ClientServiceClient clientServiceClient = null;
+        public static ProductServiceClient productServiceClient = null;
+        private const string EntityProcessConfiguration = "EntityProcessConfiguration";
+        private const string OPENDETAILPRODS = "OPENDETAILPRODS";
+        private const string UpdatePriceEntityProcessConfiguration = "UpdatePriceEntityProcessConfiguration";
+        protected Logger _klogger;
+        protected string endpoint = OperationContext.Current?.EndpointDispatcher?.EndpointAddress?.ToString();
+        // Guards only the Save() inside PricingFactorCopy
+        private static readonly object _prcCopyLock = new object();
+
+        // Guards only the GenerateFactorTrades calls in FactoredTrades
+        private static readonly object _factoredTradesLock = new object();
+        private readonly string FACTOREDTRADESERVICE;
+        #endregion
+
+        #region public methods and constructor
+        public FactoredTradesRepository(DateTime reportDate, List<PendingPnl> pendingPnlList, List<Holiday> holidayList, string folderName, RequestParameters reqParamater,
+            int batchID)
+        {
+            this._folderName = folderName;
+            this._reqParamater = reqParamater;
+            this._reportDate = reportDate;
+            this._pendingPnlList = pendingPnlList;
+            this._batchID = batchID;
+            entityConfigClient = new EntityConfigClient(AppConfiguration.Main2MastersAPI);
+            productServiceClient = new ProductServiceClient(AppConfiguration.Main2MastersAPI);
+            clientServiceClient = new ClientServiceClient(AppConfiguration.Main2MastersAPI);
+            _klogger = Logger.Instance;
+        }
+
+
+        public void Process()
+        {
+            var dopSetting = entityConfigClient.GetSystemConfigurationData("0", "FactoredTradeMaxDegreeOfParallelism");
+            var sysInfo = dopSetting.SingleOrDefault();
+            int maxDop;
+            if (sysInfo!=null && int.TryParse(sysInfo.Value, out var parsed) && parsed > 0)
+            {
+                // fallback to using predefined processors
+                maxDop = parsed;
+            }
+            else
+            {
+                maxDop = Environment.ProcessorCount / 4;
+            }
+            var isMasterDecouplingApplicable = entityConfigClient.IsDecoupledMasterApplicable(_reqParamater.clientID);
+            if (isMasterDecouplingApplicable)
+            {
+                var spName = "FetchMasterDataForFactoredTrades";
+                var connectionString = UtilityMethods.GetPrimaryServerBasedConnectionString(_reqParamater.connectionString);
+                var clientBrokerMapping = GetClientBrokerMapping(_reqParamater.clientID, _reqParamater.connectionString);
+                var clientBrokerMappingXML = NAV.Common.Extensions.Generic.SerializeToXml(clientBrokerMapping);
+                _fetchMasterDataForFactoredTrades = FetchMasterDataForPricingFactors.CreateObject(connectionString, _reqParamater.clientID, _reportDate, 0,
+                  _folderName, _reqParamater, clientBrokerMappingXML, spName);
+
+                _clientSettings = GetEntityProcessConfiguration(_reqParamater.clientID, _reqParamater.connectionString);
+                _clientBrokerMapping = clientBrokerMapping;
+            }
+            else
+            {
+                _getMasterDataForFactoredTrades = GetMasterDataForPricingFactors.CreateObject(_reqParamater.connectionString, _reqParamater.clientID, _reportDate, 0,
+                   _folderName, _reqParamater);
+
+                _clientSettings = _getMasterDataForFactoredTrades.ClientSettings;
+                _clientBrokerMapping = _getMasterDataForFactoredTrades.ClientBrokerMapping;
+            }
+
+            string factoredTradeMethodSetting =
+             Convert.ToString(_clientSettings?.Where(x => x.EntityProcessConfigType == EntityProcesses.FACTORTRADEMETHOD.ToString()).FirstOrDefault()?.ProcessTypeValue);
+
+            //combined Final List
+            List<AccountProductCurrency> lstAccProdCurrencies = new List<AccountProductCurrency>();
+
+
+
+            //As per shubham...if Factored Trade method has been removed from a client from a certain date then we will delete all the factored trades
+            //irrespective of whether they have been updated manually by user or not...since now there is no meaning of keeping any kind of factored trade
+            if (string.IsNullOrWhiteSpace(factoredTradeMethodSetting) || factoredTradeMethodSetting == FactoredTradeMethodsEnum.None.ToString())
+            {
+                lstAccProdCurrencies = _pendingPnlList.Where
+                           (e => (
+                                           e.TableName == EnumRepository.PnlTable.MasterPricingFactor ||
+                                           e.TableName == EnumRepository.PnlTable.ClientPricingFactor ||
+                                           e.TableName == EnumRepository.PnlTable.data_generation ||
+                                            e.TableName == EnumRepository.PnlTable.trade_detail
+
+                                       ) && e.FromDate <= _reportDate
+                                      ).Select(x => new AccountProductCurrency
+                                      {
+                                          AccountID = x.AccountID,
+                                          ProductID = x.ProdID ?? 0,
+                                          CurrencyID = x.CurrID ?? 0
+                                      }
+                                      ).Distinct().ToList();
+                if (isMasterDecouplingApplicable)
+                {
+                    var brokerId = clientServiceClient.GetClientMasterData(_reqParamater.clientID.ToString()).FirstOrDefault().BrokerId;
+                    RemoveFactoredTrades(lstAccProdCurrencies, brokerId);
+                }
+                else
+                {
+                    //1. Delete Factored Trades
+                    DeleteFactoredTrades(lstAccProdCurrencies);
+                }
+
+            }
+            else
+            {
+                List<AccountProductCurrency> lstAccProdCurrenciesForMasterAndClientPricingFactorPNSItems = _pendingPnlList.Where
+                           (e => (
+                                           e.TableName == EnumRepository.PnlTable.MasterPricingFactor ||
+                                           e.TableName == EnumRepository.PnlTable.ClientPricingFactor
+
+                                       ) && e.FromDate <= _reportDate
+                                      ).Select(x => new AccountProductCurrency
+                                      {
+                                          AccountID = x.AccountID,
+                                          ProductID = x.ProdID ?? 0,
+                                          CurrencyID = x.CurrID ?? 0
+                                      }
+                                      ).Distinct().ToList();
+
+
+                List<AccountProductCurrency> lstAccProdCurrenciesForDataGenerationAndTradeDetailPNSItems = _pendingPnlList.Where
+                       (e =>
+                               (e.TableName == EnumRepository.PnlTable.data_generation ||
+                                 e.TableName == EnumRepository.PnlTable.trade_detail
+                               ) && e.FromDate <= _reportDate
+                               ).Select(x => new AccountProductCurrency
+                               {
+                                   AccountID = x.AccountID,
+                                   ProductID = x.ProdID ?? 0,
+                                   CurrencyID = x.CurrID ?? 0
+                               }
+                                   ).Distinct().ToList();
+
+
+
+                var tpl = GetManuallyUpdatedGrains();
+
+                var accountProductCurrencyComparer = new AccountProductCurrencyComparer();
+
+                if (lstAccProdCurrenciesForMasterAndClientPricingFactorPNSItems != null && lstAccProdCurrenciesForMasterAndClientPricingFactorPNSItems.Count() > 0)
+                {
+                    //1. Add to final list Intersection of both types of pending PNS Items
+                    var commonItems = lstAccProdCurrenciesForMasterAndClientPricingFactorPNSItems.Intersect(lstAccProdCurrenciesForDataGenerationAndTradeDetailPNSItems, accountProductCurrencyComparer);
+                    foreach (AccountProductCurrency commonItem in commonItems)
+                    {
+                        lstAccProdCurrencies.Add(commonItem);
+                    }
+
+                    //2. Add to final list items available only in Master/client pricing factor pending PNS bucket
+                    var exclusiveItemsMasterClientPricingFactorBucket = lstAccProdCurrenciesForMasterAndClientPricingFactorPNSItems.Except(lstAccProdCurrenciesForDataGenerationAndTradeDetailPNSItems, accountProductCurrencyComparer);
+                    foreach (AccountProductCurrency exclusiveItem in exclusiveItemsMasterClientPricingFactorBucket)
+                    {
+                        lstAccProdCurrencies.Add(exclusiveItem);
+                    }
+                }
+
+                if (lstAccProdCurrenciesForDataGenerationAndTradeDetailPNSItems != null && lstAccProdCurrenciesForDataGenerationAndTradeDetailPNSItems.Count() > 0)
+                {
+                    //3. Get items available only in Data Generation/Trade Detail pending PNS bucket
+                    var exclusiveItemsDGAndTDBucket = lstAccProdCurrenciesForDataGenerationAndTradeDetailPNSItems.Except(lstAccProdCurrenciesForMasterAndClientPricingFactorPNSItems, accountProductCurrencyComparer);
+
+                    //4.Add to final list all those non account level Trade-Detail and Data generation PNS items which are not present in Manually Updated Grains
+                    var exclusiveItemsDGAndTDBucketAccountLevelItems = exclusiveItemsDGAndTDBucket?.Where(x => (x.ProductID ?? 0) == 0)?.ToList();
+                    var exclusiveItemsDGAndTDBucketNonAccountLevelItems = exclusiveItemsDGAndTDBucket?.Where(x => (x.ProductID ?? 0) != 0)?.ToList();
+
+                    List<int> lstAccountLevelAccIDs = exclusiveItemsDGAndTDBucketAccountLevelItems?.Select(y => y.AccountID)?.ToList();
+                    exclusiveItemsDGAndTDBucketNonAccountLevelItems?.RemoveAll(a => lstAccountLevelAccIDs.Contains(a.AccountID));
+
+                    var itemsNotPresentInGrainBucket = exclusiveItemsDGAndTDBucketNonAccountLevelItems.Except(tpl.lstManuallyUpdatedGrains, accountProductCurrencyComparer);
+                    foreach (AccountProductCurrency indItem in itemsNotPresentInGrainBucket)
+                    {
+                        lstAccProdCurrencies.Add(indItem);
+                    }
+
+                    //5. Add to final list all those account level Trade-Detail and Data generation PNS items which are not present in Manual updated Grain
+                    List<int> lstAccountsPresentInManuallyUpdatedGrain = tpl.lstManuallyUpdatedGrains?.Select(x => x.AccountID)?.ToList();
+                    List<int> lstAccountsLevelItemsToBeDirectlyAddedToFinalList = exclusiveItemsDGAndTDBucketAccountLevelItems?.Where(a => !lstAccountsPresentInManuallyUpdatedGrain.Contains(a.AccountID)).
+                                                                                    Select(y => y.AccountID)?.ToList();
+
+                    foreach (int accID in lstAccountsLevelItemsToBeDirectlyAddedToFinalList)
+                    {
+                        lstAccProdCurrencies.Add(new AccountProductCurrency(accID, 0, 0));
+                    }
+
+                    //6. Add Remaining items from Trade Detail /Data generation Bucket
+                    exclusiveItemsDGAndTDBucketAccountLevelItems?.RemoveAll(a => !lstAccountsPresentInManuallyUpdatedGrain.Contains(a.AccountID));
+                    List<int> lstRemainingAccounts = exclusiveItemsDGAndTDBucketAccountLevelItems?.Select(o => o.AccountID)?.ToList();
+                    List<AccountProductCurrency> lstRemainingAccsProdsCurrs = tpl.lstAllProductCurrenciesForManuallyUpdatedAccounts?.Where(a => lstRemainingAccounts.Contains(a.AccountID))?.ToList();
+
+                    var remainingItems = lstRemainingAccsProdsCurrs.Except(tpl.lstManuallyUpdatedGrains, accountProductCurrencyComparer);
+                    foreach (AccountProductCurrency remainingItem in remainingItems)
+                    {
+                        lstAccProdCurrencies.Add(remainingItem);
+                    }
+
+                }
+
+
+                if (isMasterDecouplingApplicable)
+                {
+                    var brokerId = clientServiceClient.GetClientMasterData(_reqParamater.clientID.ToString()).FirstOrDefault().BrokerId;
+                    RemoveFactoredTrades(lstAccProdCurrencies, brokerId);
+                }
+                else
+                {
+                    //1. Delete Factored Trades
+                    DeleteFactoredTrades(lstAccProdCurrencies);
+                }
+
+                List<int> lstAccIDs = lstAccProdCurrencies.Select(k => k.AccountID).Distinct().ToList();
+                string accIDs = string.Join(",", lstAccIDs);
+
+                GetProductsUsedInClient getProductsUsedInClient = GetProductsUsedInClient.CreateObject(_reqParamater.connectionString, _reqParamater.clientID, _reportDate,
+                    accIDs, _folderName, _reqParamater);
+
+                IEnumerable<int> distinctMasterLevelProdItems;
+                if (isMasterDecouplingApplicable)
+                {
+                    distinctMasterLevelProdItems = _fetchMasterDataForFactoredTrades.MasterPricingFactors.Select(a => a.ProductID).Distinct();
+                }
+                else
+                {
+                    distinctMasterLevelProdItems = _getMasterDataForFactoredTrades.MasterPricingFactors.Select(a => a.ProductID).Distinct();
+                }
+
+                string brokerXml = null;
+                if (isMasterDecouplingApplicable)
+                {
+                    brokerXml = NAV.Common.Extensions.Generic
+                                  .SerializeToXml(_clientBrokerMapping);
+                }
+                //Loop Over all product-accounts combination individually and run process
+
+                // 2) Parallelize the per-account loop
+                var parallelOpt = new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = maxDop
+                };
+
+
+
+                Parallel.ForEach(lstAccIDs, parallelOpt, accItemID =>
+                {
+                    if (!getProductsUsedInClient._dictClientAccountProductsList.ContainsKey(accItemID))
+                    {
+                        return;
+                    }
+
+                    var distinctClientLevelProdItems = getProductsUsedInClient._dictClientAccountProductsList[accItemID].Select(a => a.ProductID).Distinct();
+
+
+                    List<int> applicableProdList = distinctMasterLevelProdItems.Intersect(distinctClientLevelProdItems).ToList();
+
+
+                    if (applicableProdList == null || applicableProdList.Count() == 0)
+                    {
+                        return;
+                    }
+
+                    int accountID = accItemID;
+
+                    //Products for Account
+                    List<int> lstProdIDs = new List<int>();
+
+                    string prodIDs = string.Empty;
+
+                    lstProdIDs = lstAccProdCurrencies.Where(y => y.AccountID == accountID)?.Select(a => a.ProductID ?? 0).Distinct().ToList();
+                    List<int> actualApplicableProds = new List<int>();
+
+                    if (!lstProdIDs.Contains(0))
+                    {
+                        actualApplicableProds = applicableProdList.Intersect(lstProdIDs).ToList();
+                        if (actualApplicableProds == null || actualApplicableProds.Count() == 0)
+                        {
+                            return;
+                        }
+                        else
+                        {
+                            lstProdIDs = actualApplicableProds;
+                        }
+
+                    }
+                    else
+                    {
+                        lstProdIDs = new List<int>() { 0 };
+                    }
+
+                    prodIDs = string.Join<int>(",", lstProdIDs);
+
+
+                    try
+                    {
+                        
+                        List<PricingFactorData> masterData;
+                        List<PricingFactorData> clientData;
+
+                        if (isMasterDecouplingApplicable)
+                        {
+                            // 1) Create a typed FetchMasterDataForPricingFactors
+                            var localFetcher = FetchMasterDataForPricingFactors.CreateObject(
+                                UtilityMethods.GetPrimaryServerBasedConnectionString(_reqParamater.connectionString),
+                                _reqParamater.clientID,
+                                _reportDate,
+                                0,
+                                _folderName,
+                                _reqParamater,
+                                brokerXml,
+                                "FetchMasterDataForFactoredTrades");
+
+                            // 2) Refresh
+                            localFetcher.UpdateData();
+
+                            // 3) Slice into masterData/clientData
+                            if (lstProdIDs.Contains(0))
+                            {
+                                masterData = localFetcher.MasterPricingFactors.ToList();
+                                clientData = localFetcher.ClientPricingFactors.ToList();
+                            }
+                            else
+                            {
+                                masterData = localFetcher.MasterPricingFactors
+                                    .Where(x => lstProdIDs.Contains(x.ProductID))
+                                    .ToList();
+                                clientData = localFetcher.ClientPricingFactors
+                                    .Where(x => lstProdIDs.Contains(x.ProductID))
+                                    .ToList();
+                            }
+                        }
+                        else
+                        {
+                            // 1) Create a typed GetMasterDataForPricingFactors
+                            var localFetcher = GetMasterDataForPricingFactors.CreateObject(
+                                _reqParamater.connectionString,
+                                _reqParamater.clientID,
+                                _reportDate,
+                                0,
+                                _folderName,
+                                _reqParamater);
+
+                            // 2) Refresh
+                            localFetcher.UpdateData();
+
+                            // 3) Slice into masterData/clientData
+                            if (lstProdIDs.Contains(0))
+                            {
+                                masterData = localFetcher.MasterPricingFactors.ToList();
+                                clientData = localFetcher.ClientPricingFactors.ToList();
+                            }
+                            else
+                            {
+                                masterData = localFetcher.MasterPricingFactors
+                                    .Where(x => lstProdIDs.Contains(x.ProductID))
+                                    .ToList();
+                                clientData = localFetcher.ClientPricingFactors
+                                    .Where(x => lstProdIDs.Contains(x.ProductID))
+                                    .ToList();
+                            }
+                        }
+
+                        //1. Pricing Factor Copying Process
+                        logger.Info.Write(string.Format("Start: PricingFactorCopy: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodIDs = {3}, batchID = {4}",
+                          _reqParamater.clientID, _reportDate, accountID, prodIDs, _batchID));
+
+                        PricingFactorCopy prcFactorCopy = new PricingFactorCopy(masterData, clientData, _reportDate, lstProdIDs, accountID, _pendingPnlList, _clientBrokerMapping, getProductsUsedInClient._dictClientAccountProductsList[accountID], _folderName,
+                        _reqParamater, logger);
+                        prcFactorCopy.primaryOperationId = primaryOperationId;
+                        prcFactorCopy.Process(_prcCopyLock);
+
+
+                        logger.Info.Write(string.Format("End: PricingFactorCopy: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodIDs = {3}, batchID = {4}",
+                          _reqParamater.clientID, _reportDate, accountID, prodIDs, _batchID));
+
+
+                        //2. Factor Trades Creation Process & PNS Priority Addition
+                        logger.Info.Write(string.Format("Start: FactoredTrades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodIDs = {3}, batchID = {4}",
+                          _reqParamater.clientID, _reportDate, accountID, prodIDs, _batchID));
+
+                        List<AccountProductCurrency> lstCurrAccountProdCurrencies = lstAccProdCurrencies.Where(y => y.AccountID == accountID).ToList();
+
+                        FactoredTrades factoredTrades = FactoredTrades.CreateObject(_reportDate, lstProdIDs, accountID, _pendingPnlList, lstCurrAccountProdCurrencies,
+                            _reqParamater, _clientSettings, _clientBrokerMapping, _folderName, logger, isMasterDecouplingApplicable, productServiceClient);
+                        factoredTrades.primaryOperationId = primaryOperationId;
+                        factoredTrades.Process(_factoredTradesLock);
+
+                        logger.Info.Write(string.Format("End: FactoredTrades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodIDs = {3}, batchID = {4}",
+                        _reqParamater.clientID, _reportDate, accountID, prodIDs, _batchID));
+
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Critical(string.Format("Error in Execute Factor Trades on Product: Parameters: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodIDs = {3}, batchID = {4}", _reqParamater.clientID, _reportDate,
+                            accountID, prodIDs, _batchID), ex);
+
+                        _klogger.LogErrorMessage(_reqParamater.clientID, ex.ToString(), $"Problem in Execute Factor Trades on Product : Parameters: clientID = {_reqParamater.clientID}, reportDate = {_reportDate}, accountIDs = {accountID}, prodIDs = {prodIDs}, batchID = {_batchID}", primaryOperationId, Guid.NewGuid(), _reportDate, 1, 0, "FactoredTradeService", Environment.CurrentDirectory + " URL: " + endpoint);
+
+                        throw ex;
+                    }
+
+                });
+
+
+                foreach(var (accId,prodId) in AutoGenQueue.Snapshot())
+                {
+                    SetAutoGeneratePosition(accId, prodId);
+                }
+            }
+        }
+
+        
+        private List<EntityProcessConfiguration> GetEntityProcessConfiguration(int clientID, string connection)
+        {
+            return FactoredTradeServiceDAL.GetEntityProcessConfiguration(connection, clientID, _reportDate, EntityProcessConfiguration);
+        }
+
+        private List<ClientBrokerMappingForPRCFactor> GetClientBrokerMapping(int clientID, string connection)
+        {
+            return FactoredTradeServiceDAL.GetClientBrokerMappingForSecurityAttributes(connection, clientID);
+        }
+
+        private protected (List<AccountProductCurrency> lstManuallyUpdatedGrains, List<AccountProductCurrency> lstAllProductCurrenciesForManuallyUpdatedAccounts) GetManuallyUpdatedGrains()
+        {
+            logger.Info.Write(string.Format("Start: GetManuallyUpdatedGrains: clientID = {0}, reportDate = {1}",
+                      _reqParamater.clientID, _reportDate));
+            GetManuallyUpdatedItems manuallyUpdatedItems = GetManuallyUpdatedItems.CreateObject(_reqParamater.connectionString, _reqParamater.clientID, _reportDate, _folderName, _reqParamater);
+
+            logger.Info.Write(string.Format("End: GetManuallyUpdatedGrains: clientID = {0}, reportDate = {1}",
+                      _reqParamater.clientID, _reportDate));
+
+            return (manuallyUpdatedItems._lstManuallyUpdatedGrains, manuallyUpdatedItems._lstAllProductCurrenciesForManuallyUpdatedAccounts);
+        }
+
+        private protected int DeleteFactoredTrades(List<AccountProductCurrency> lstAccProdCurrencies)
+        {
+            logger.Info.Write(string.Format("Start: DeleteFactoredTrades: clientID = {0}, reportDate = {1}",
+                      _reqParamater.clientID, _reportDate));
+
+            string accProdCurrencies = JsonConvert.SerializeObject(lstAccProdCurrencies);
+
+            DeleteFactoredTrades deleteFactoredTrades = new DeleteFactoredTrades(_reportDate, _reqParamater.clientID, accProdCurrencies, _reqParamater,
+                 "GuiDeleteFactorTradesData");
+            deleteFactoredTrades.ExecuteNonQuery();
+
+            logger.Info.Write(string.Format("End: DeleteFactoredTrades: clientID = {0}, reportDate = {1}",
+                      _reqParamater.clientID, _reportDate));
+            return deleteFactoredTrades.ReturnValue;
+        }
+
+        private protected int RemoveFactoredTrades(List<AccountProductCurrency> lstAccProdCurrencies, int brokerId)
+        {
+            logger.Info.Write(string.Format("Start: RemoveFactoredTrades: clientID = {0}, reportDate = {1}",
+                      _reqParamater.clientID, _reportDate));
+
+            string accProdCurrencies = JsonConvert.SerializeObject(lstAccProdCurrencies);
+
+            RemoveFactoredTrades removeFactoredTrades = new RemoveFactoredTrades(_reportDate, _reqParamater.clientID, accProdCurrencies, _reqParamater, brokerId,
+                 "UiDeleteFactorTradesData");
+            removeFactoredTrades.ExecuteNonQuery();
+
+
+            logger.Info.Write(string.Format("End: RemoveFactoredTrades: clientID = {0}, reportDate = {1}",
+                      _reqParamater.clientID, _reportDate));
+            return removeFactoredTrades.ReturnValue;
+        }
+
+
+        private String GetpriorityGetPrioritiesForSecuritiesXML(List<PNSPriorities> priorityGetPrioritiesForSecurities)
+        {
+            return NAV.Common.Extensions.Generic.SerializeToXml(priorityGetPrioritiesForSecurities);
+        }
+
+        private string GetProductXml(string connectionString, DateTime reportDate, int clientID, string prodids)
+        {
+            var productXml = "";
+            if (string.IsNullOrWhiteSpace(prodids))
+            {
+                var productIds = FactoredTradeServiceDAL.GetOpenDetailProducts(connectionString, reportDate, clientID);
+                if (!productIds.Any())
+                    return productXml;
+                prodids = string.Join(",", productIds);
+            }
+
+            var products = productServiceClient.GetProductsForFilterCriteria(new NAV.MasterServiceBusinessObjects.Filters.ProductFilter { Ids = prodids }, clientID, connectionString);
+
+            return NAV.Common.Extensions.Generic.SerializeToXml(products.ToList());
+        }
+
+        public void SetAutoGeneratePosition(int accountID, int prodID)
+        {
+            var startDateTime = DateTime.UtcNow;
+            var operationId = Guid.NewGuid();
+
+            logger.Info.Write(string.Format("Start: SetAutoGeneratePosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, accountID, prodID));
+
+
+            AutoGeneratePosition autoGeneratePosition = new AutoGeneratePosition(_reportDate, _reqParamater.clientID, prodID, accountID, _reqParamater,
+                  "GuiAutoGeneratePositionForFactoredTrades");
+
+            autoGeneratePosition.ExecuteNonQuery();
+
+            logger.Info.Write(string.Format("End: SetAutoGeneratePosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, accountID, prodID));
+
+            var customDetails = new { prodID = prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Set Auto Generate Position For FactoredTrades", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+        }
+
+
+        #endregion
+    }
+}
+
