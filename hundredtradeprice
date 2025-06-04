@@ -1,0 +1,478 @@
+using NAV.Common.Logging;
+using Nav.FactoredTradeService.Data;
+using System;
+using System.Collections.Generic;
+using NAV.PNL.Data.Common;
+using System.Linq;
+using System.Data;
+using TradePosition = Nav.FactoredTradeService.Data.TradePosition;
+using Nav.FactoredTradeService.Utilities;
+using Newtonsoft.Json;
+using System.Collections.Concurrent;
+using NavFactoredServiceDeployment.BusinessLogic;
+using NAV.PNL.DataAccess.Get;
+
+namespace Nav.FactoredTradeService.BusinessLogic
+{
+    public class HundredTradePrice : FactoredTradeMethods
+    {
+        #region Public Methods & Constructor
+        public HundredTradePrice(ILogger logger, List<PricingFactorData> clientPricingFactors, List<EntityProcessConfiguration> clientSettings,
+            DateTime reportDate, int prodID, int accountID, List<PendingPnl> pendingPnlList, string folderName, RequestParameters reqParamater) :
+            base(logger, clientPricingFactors, clientSettings, reportDate, prodID, accountID, pendingPnlList, folderName, reqParamater)
+        { }
+
+
+        public override void CalculateFactoredTrades()
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            if (_prevDayPositionTradesAndPairing._shadowClientAccountMappingList.Any(x => x.ShadowClientID == _reqParamater.clientID))
+            {
+                _logger.Info.Write(string.Format("Since client exists under Shadow Client Account Mapping Bucket, so we won't create Factored Trades in Client. Exiting..: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                 _reqParamater.clientID, _reportDate, _accountID, _prodID));
+                return;
+            }
+
+            _logger.Info.Write(string.Format("Start: HunderedTradePrice - CalculateFactoredTrades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+              _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var reportDateProdItem = _clientPricingFactors.Where(x => (_reportDate >= x.ValidFrom && _reportDate <= x.ValidTo) && x.ProductID == _prodID);
+            var prevReportDateProdItem = _clientPricingFactors.Where(x => (_reportDate.AddDays(-1) >= x.ValidFrom && _reportDate.AddDays(-1) <= x.ValidTo) && x.ProductID == _prodID);
+
+            if (reportDateProdItem == null || reportDateProdItem.Count() == 0)
+            {
+                string exception = string.Format("Client level Pricing Factor not available for Factored Trades Calculation: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodIDs = {3}", _reqParamater.clientID, _reportDate,
+                        _accountID, _prodID);
+                _logger.Critical(exception);
+
+                _klogger.LogErrorMessage(_reqParamater.clientID, exception, exception, primaryOperationId, operationId, _reportDate, 2, 0, FACTOREDTRADESERVICE, endpoint);
+
+
+                throw new Exception(exception);
+            }
+
+            double currentPricingFactor = reportDateProdItem.FirstOrDefault().PricingFactor;
+            double previousPricingFactor = (prevReportDateProdItem == null || prevReportDateProdItem.Count() == 0) ? 1 : prevReportDateProdItem.FirstOrDefault().PricingFactor;
+            DateTime currentDateTime = DateTime.Now;
+
+
+            double? sourceProdMultiplier = _prevDayPositionTradesAndPairing._prodSettingsList.FirstOrDefault()?.SourceProdMultiplier;
+            double? sourceProdTickValue = _prevDayPositionTradesAndPairing._prodSettingsList.FirstOrDefault()?.SourceProdTickValue;
+
+            sourceProdMultiplier = (sourceProdMultiplier == null ? 0.01 : sourceProdMultiplier);
+            sourceProdTickValue = (sourceProdTickValue == null ? 1 : sourceProdTickValue);
+
+            //Filter out future original trades
+            List<Trade> filteredTrades = FilterOriginalTradesForFactoredTradesCreation(_prevDayPositionTradesAndPairing._originalTradesList,
+                _prevDayPositionTradesAndPairing._previousDayPositionList, _prevDayPositionTradesAndPairing._currentReportDateAndBackDateSettledTradesList);
+
+            List<Trade> currentReportDateActualTrades = FilterCurrentDayBackDateTradesForFactoredTradesCreation(_prevDayPositionTradesAndPairing._currentReportDateAndBackDateSettledTradesList);
+
+
+            if ((filteredTrades != null && filteredTrades.Count() > 0) ||
+               (currentReportDateActualTrades != null && currentReportDateActualTrades.Count() > 0)
+               )
+            {
+                if (filteredTrades != null && filteredTrades.Count() > 0)
+                {
+                    var tr = (from trade in filteredTrades
+                              join tp in _prevDayPositionTradesAndPairing._previousDayPositionList on trade.TradeID equals tp.TradeID1 into p1
+                              from trade_position in p1.DefaultIfEmpty()
+                              select new { trade, trade_position }).ToList();
+
+                    int lotID = 1;
+
+                    /* New individual tax lot approach */
+                    //Create Trade Position combined Set
+                    List<TradePosition> tradePositionList = tr.Select(e => new TradePosition
+                    {
+                        LotID = lotID++,
+                        StatusID = e.trade_position.StatusID,
+                        TradeID = e.trade.TradeID,
+                        ProductID = e.trade.ProductID,
+                        TxnCode = e.trade_position.Txn.Trim(),
+                        Strategy = e.trade.Strategy,
+                        AccountID = e.trade.AccountID,
+                        CurrencyID = e.trade.CurrencyID,
+                        BrokerID = e.trade.BrokerID,
+                        PositionQuantity = (double)e.trade_position.Quantity,
+                        TradePrice = (double)e.trade_position.Price1,
+                        TradeDate = e.trade.TradeDate,
+                        PrincipleAmount = e.trade.PrincipleAmount ?? 0,
+                        PositionCostAmount = ((double)e.trade_position.Quantity * (double)e.trade_position.Price1) - (double)e.trade_position.Comm1,
+                        ExchangeRate1 = (double)e.trade_position.ExchangeRate1,
+                        CostAmount = e.trade.CostAmount ?? 0,
+                        RealPL = e.trade.RealPL ?? 0,
+                        Field1 = e.trade.Field1 ?? string.Empty,
+                        Field2 = e.trade.Field2 ?? string.Empty,
+                        Field3 = e.trade.Field3 ?? string.Empty,
+                        Field4 = e.trade.Field4 ?? string.Empty,
+                        Field5 = e.trade.Field5 ?? string.Empty,
+                        Field8 = e.trade.Field8 ?? string.Empty,
+                        Field9 = e.trade.Field9 ?? string.Empty,
+                        AccNum = e.trade.AccNum ?? string.Empty,
+                        Factor = e.trade.Factor ?? 0,
+                        ExecutingBroker = e.trade.ExecutingBroker ?? string.Empty,
+                        ClearingBroker = e.trade.ClearingBroker ?? string.Empty,
+                        NavcisTradeId = e.trade.NavcisTradeId ?? 0,
+                        TradeTXNCode = e.trade.TxnCode,
+                        NotionalQuantity = e.trade.NotionalQuantity ?? 0,
+                        TradeType = e.trade.TradeType ?? string.Empty,
+                        NavcisVersionSource = e.trade.NavcisVersionSource ?? string.Empty,
+                        RefDate = e.trade.RefDate,
+                        TrsBank = e.trade.TrsBank ?? 0,
+                        DealId = e.trade.DealId ?? string.Empty,
+                        ActualSettlementDate = e.trade.ActualSettlementDate,
+                        Field7 = e.trade.Field7 ?? string.Empty,
+                        ReportDate = e.trade.ReportDate,
+                        TradeID2 = e.trade_position.TradeID2
+                    }).ToList();
+
+
+                    List<TradePosition> tradePositionListForLots = tradePositionList.Where(z => z.TradeID2 == null).ToList();
+
+
+                    if (tradePositionListForLots != null && tradePositionListForLots.Count > 0)
+                    {
+
+                        //Create Factored Trades
+                        List<Trade> factoredTrades = tradePositionListForLots.Select(e => new Trade
+                        {
+                            LotID = e.LotID,
+                            TradeID = 0,
+                            Source = "N",
+                            Status = "E",
+                            ReportDate = _reportDate,
+                            ClientID = _reqParamater.clientID,
+                            BrokerID = e.BrokerID,
+                            TradeDate = _reportDate,
+                            SettlementDate = _reportDate,
+                            AccountID = e.AccountID,
+                            CurrencyID = e.CurrencyID,
+                            ProductID = e.ProductID,
+                            Quantity = ((e.PositionQuantity / previousPricingFactor) * currentPricingFactor) - e.PositionQuantity,
+                            Price = 100,
+                            PrincipleAmount = 0,
+                            CostAmount = 0,
+                            InterestAmount = 0,
+                            InterestReceived = 0,
+                            Dividend = 0,
+                            TaxWithheld = 0,
+                            Commission = 0,
+                            ExchFee = 0,
+                            NfaFee = 0,
+                            HandleFee = 0,
+                            GiveupFee = 0,
+                            EfpFee = 0,
+                            TxnCode = (UtilityMethods.Sign(((e.PositionQuantity / previousPricingFactor) * currentPricingFactor) - e.PositionQuantity) == UtilityMethods.Sign(e.PositionQuantity))
+                                    ? e.TxnCode :
+                                    (e.TxnCode == "BY" ? "SL" : (e.TxnCode == "SS" ? "CS" : string.Empty)),
+
+                            Strategy = e.Strategy,
+                            Priority = 0,
+                            RealPL = e.RealPL,
+                            Field1 = e.Field1,
+                            Field2 = e.Field2,
+                            Field3 = e.Field3,
+                            Field4 = e.Field4,
+                            Field5 = e.Field5,
+                            OriginalTradeID = null,
+                            CxlRefId = null,
+                            CxlFlag = null,
+                            Field8 = e.Field8,
+                            Field9 = e.Field9,
+                            AccNum = e.AccNum,
+                            Factor = e.Factor,
+                            ExecutingBroker = e.ExecutingBroker,
+                            ClearingBroker = e.ClearingBroker,
+                            NavcisTradeId = e.NavcisTradeId,
+                            NotionalQuantity = e.NotionalQuantity,
+                            TradeType = e.TradeType,
+                            NavcisVersionSource = e.NavcisVersionSource,
+                            CancelID = null,
+                            ReinstateId = null,
+                            RefDate = e.RefDate,
+                            TrsBank = e.TrsBank,
+                            DealId = e.DealId,
+                            ActualSettlementDate = e.ActualSettlementDate,
+                            Field7 = e.Field7,
+                            VersionSource = ("PRCFACTOR: " + Convert.ToString(currentPricingFactor) + ":PNL").Length < 30 ? ("PRCFACTOR: " + Convert.ToString(currentPricingFactor) + ":PNL")
+                        : ("PRCFACTOR: " + Convert.ToString(currentPricingFactor) + ":PNL").Substring(0, 29),
+                            VersionDate = currentDateTime,
+                            ROWGUID = Guid.NewGuid(),
+                            ActualTradeID = e.TradeID,
+                            ExchangeRate1 = e.ExchangeRate1
+                        }
+                     ).ToList();
+
+                        //Update Long Short
+                        factoredTrades.ForEach(
+                            a =>
+                            {
+                                a.LongShort = (a.TxnCode == "SL" || a.TxnCode == "BY") ? "L" : ((a.TxnCode == "CS" || a.TxnCode == "SS") ? "S" : string.Empty);
+                                a.Amount = -1 * a.Quantity * a.Price * .01;
+                            }
+                           );
+
+                        //set sell trades priorities
+                        SetPrioritiesForSellFactoredTrades(factoredTrades);
+                        //Save Factored Trades
+                        SaveData(factoredTrades, currentDateTime);
+                    }
+                    //Factored Trades for PNS Items
+                    List<TradePosition> tradePositionListForPNS = tradePositionList.Where(z => z.TradeID2 != null).ToList();
+
+                    if (tradePositionListForPNS.Count > 0)
+                    {
+                        CreateFactoredTradesForFutureSettledPNSTrades(tradePositionListForPNS, currentPricingFactor, previousPricingFactor, (double)sourceProdMultiplier, (double)sourceProdTickValue);
+                    }
+                }
+
+                if (currentReportDateActualTrades != null && currentReportDateActualTrades.Count() > 0)
+                {
+                    CreateFactoredTradesForCurrentReportDateBackdaySettledTrades(currentReportDateActualTrades, currentPricingFactor, previousPricingFactor, (double)sourceProdMultiplier, (double)sourceProdTickValue);
+                }
+
+                SetAutoGeneratePosition();
+                AutoGenQueue.Enqueue(_accountID, _prodID);
+            }
+
+            _logger.Info.Write(string.Format("End: HunderedTradePrice - CalculateFactoredTrades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+              _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Calculate Factored Trades", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, endpoint);
+
+        }
+        
+       
+
+        //Adjusting Amount and Quantity for Future Paired Trades
+        public override void CreateFactoredTradesForFutureSettledPNSTrades(List<TradePosition> tradePositionList, double currentPricingFactor, double previousPricingFactor,
+           double sourceProdMultiplier, double sourceProdTickValue)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            _logger.Info.Write(string.Format("Start: CreateFactoredTradesForFutureSettledPNSTrades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                   _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            DateTime currentDateTime = DateTime.Now;
+
+            List<Trade> factoredTrades = tradePositionList.Select(e => new Trade
+            {
+                LotID = e.LotID,
+                StatusID = e.StatusID,
+                TradeID = 0,
+                Source = "N",
+                Status = "E",
+                ReportDate = _reportDate,
+                ClientID = _reqParamater.clientID,
+                BrokerID = e.BrokerID,
+                TradeDate = _reportDate,
+                SettlementDate = _reportDate,
+                AccountID = e.AccountID,
+                CurrencyID = e.CurrencyID,
+                ProductID = e.ProductID,
+                Quantity = ((e.PositionQuantity / previousPricingFactor) * currentPricingFactor) - e.PositionQuantity,
+                Price = 100,
+                PrincipleAmount = 0,
+                CostAmount = 0,
+                InterestAmount = 0,
+                InterestReceived = 0,
+                Dividend = 0,
+                TaxWithheld = 0,
+                Commission = 0,
+                ExchFee = 0,
+                NfaFee = 0,
+                HandleFee = 0,
+                GiveupFee = 0,
+                EfpFee = 0,
+                TxnCode = (UtilityMethods.Sign(((e.PositionQuantity / previousPricingFactor) * currentPricingFactor) - e.PositionQuantity) == UtilityMethods.Sign(e.PositionQuantity))
+                       ? e.TxnCode :
+                       (e.TxnCode == "BY" ? "SL" : (e.TxnCode == "SS" ? "CS" : string.Empty)),
+
+                Strategy = e.Strategy,
+                Priority = 0,
+                RealPL = e.RealPL,
+                Field1 = e.Field1,
+                Field2 = e.Field2,
+                Field3 = e.Field3,
+                Field4 = e.Field4,
+                Field5 = e.Field5,
+                OriginalTradeID = null,
+                CxlRefId = null,
+                CxlFlag = null,
+                Field8 = e.Field8,
+                Field9 = e.Field9,
+                AccNum = e.AccNum,
+                Factor = e.Factor,
+                ExecutingBroker = e.ExecutingBroker,
+                ClearingBroker = e.ClearingBroker,
+                NavcisTradeId = e.NavcisTradeId,
+                NotionalQuantity = e.NotionalQuantity,
+                TradeType = e.TradeType,
+                NavcisVersionSource = e.NavcisVersionSource,
+                CancelID = null,
+                ReinstateId = null,
+                RefDate = e.RefDate,
+                TrsBank = e.TrsBank,
+                DealId = e.DealId,
+                ActualSettlementDate = e.ActualSettlementDate,
+                Field7 = e.Field7,
+                VersionSource = ("PRCFACTOR: " + Convert.ToString(currentPricingFactor) + ":PNL").Length < 30 ? ("PRCFACTOR: " + Convert.ToString(currentPricingFactor) + ":PNL")
+                : ("PRCFACTOR: " + Convert.ToString(currentPricingFactor) + ":PNL").Substring(0, 29),
+                VersionDate = currentDateTime,
+                ROWGUID = Guid.NewGuid(),
+                ActualTradeID = e.TradeID,
+                ExchangeRate1 = e.ExchangeRate1
+            }
+        ).ToList();
+
+            //Update Long Short
+            factoredTrades.ForEach(
+                a =>
+                {
+                    a.LongShort = (a.TxnCode == "SL" || a.TxnCode == "BY") ? "L" : ((a.TxnCode == "CS" || a.TxnCode == "SS") ? "S" : string.Empty);
+                    a.Amount = -1 * a.Quantity * a.Price * .01;
+                }
+               );
+
+            //set sell trades priorities
+            SetPrioritiesForSellFactoredTrades(factoredTrades);
+            //Save Factored Trades
+            SaveData(factoredTrades, currentDateTime);
+
+            _logger.Info.Write(string.Format("End: CreateFactoredTradesForFutureSettledPNSTrades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                  _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Create Factored Trades For Future Settled PNS Trades", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, endpoint);
+
+        }
+
+        //Current Report Date's Back Date Settled Trades
+        public override void CreateFactoredTradesForCurrentReportDateBackdaySettledTrades(List<Trade> currentReportDateActualTrades, double currentPricingFactor, double previousPricingFactor,
+        double sourceProdMultiplier, double sourceProdTickValue)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            _logger.Info.Write(string.Format("Start: CreateFactoredTradesForCurrentReportDateBackdaySettledTrades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                   _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            List<Trade> currentReportDateActualTradesDeepCopy = currentReportDateActualTrades.ConvertAll(x => (Trade)x.Clone());
+
+            DateTime currentDateTime = DateTime.Now;
+
+            //Since here we are creating factored trades from Trades instead of positions, so for by and cs txn codes, we have to
+            //make the amount positive as it will be treated as Cost Amount, while for SL and SS we have to make the amount Negative
+            //before creating Factored Trades
+            currentReportDateActualTradesDeepCopy.ForEach(x => x.Amount = x.Amount * -1);
+
+            List<Trade> factoredTrades = currentReportDateActualTradesDeepCopy.Select(e => new Trade
+            {
+                TradeID = 0,
+                Source = "N",
+                Status = "E",
+                ReportDate = _reportDate,
+                ClientID = _reqParamater.clientID,
+                BrokerID = e.BrokerID,
+                TradeDate = _reportDate,
+                SettlementDate = _reportDate,
+                AccountID = e.AccountID,
+                CurrencyID = e.CurrencyID,
+                ProductID = e.ProductID,
+                Quantity = ((e.Quantity / previousPricingFactor) * currentPricingFactor) - e.Quantity,
+                Price = 100,
+                PrincipleAmount = 0,
+                CostAmount = 0,
+                InterestAmount = 0,
+                InterestReceived = 0,
+                Dividend = 0,
+                TaxWithheld = 0,
+                Commission = 0,
+                ExchFee = 0,
+                NfaFee = 0,
+                HandleFee = 0,
+                GiveupFee = 0,
+                EfpFee = 0,
+                TxnCode = (UtilityMethods.Sign(((e.Quantity / previousPricingFactor) * currentPricingFactor) - e.Quantity) == UtilityMethods.Sign(e.Quantity))
+                       ? e.TxnCode :
+                       (e.TxnCode == "BY" ? "SL" : 
+                                            (e.TxnCode == "SS" ? "CS" : 
+                                                                    (e.TxnCode == "SL" ? "BY" : 
+                                                                                                (e.TxnCode == "CS" ? "SS" : string.Empty
+                                                                                                )
+                                                                     )
+                                             )
+                       ),
+
+                Strategy = e.Strategy,
+                Priority = 0,
+                RealPL = e.RealPL,
+                Field1 = e.Field1,
+                Field2 = e.Field2,
+                Field3 = e.Field3,
+                Field4 = e.Field4,
+                Field5 = e.Field5,
+                OriginalTradeID = null,
+                CxlRefId = null,
+                CxlFlag = null,
+                Field8 = e.Field8,
+                Field9 = e.Field9,
+                AccNum = e.AccNum,
+                Factor = e.Factor,
+                ExecutingBroker = e.ExecutingBroker,
+                ClearingBroker = e.ClearingBroker,
+                NavcisTradeId = e.NavcisTradeId,
+                NotionalQuantity = e.NotionalQuantity,
+                TradeType = e.TradeType,
+                NavcisVersionSource = e.NavcisVersionSource,
+                CancelID = null,
+                ReinstateId = null,
+                RefDate = e.RefDate,
+                TrsBank = e.TrsBank,
+                DealId = e.DealId,
+                ActualSettlementDate = e.ActualSettlementDate,
+                Field7 = e.Field7,
+                VersionSource = ("PRCFACTOR: " + Convert.ToString(currentPricingFactor) + ":PNL").Length < 30 ? ("PRCFACTOR: " + Convert.ToString(currentPricingFactor) + ":PNL")
+                : ("PRCFACTOR: " + Convert.ToString(currentPricingFactor) + ":PNL").Substring(0, 29),
+                VersionDate = currentDateTime,
+                ROWGUID = Guid.NewGuid(),
+                ActualTradeID = e.TradeID,
+                ExchangeRate1 = e.TradeExchangeRate ?? 1
+            }
+        ).ToList();
+
+            //Update Long Short
+            factoredTrades.ForEach(
+                a =>
+                {
+                    a.LongShort = (a.TxnCode == "SL" || a.TxnCode == "BY" ) ? "L" : ((a.TxnCode == "CS"  || a.TxnCode == "SS") ? "S" : string.Empty);
+                    a.Amount = -1 * a.Quantity * a.Price * .01;
+                }
+               );
+
+            //set sell trades priorities
+            SetPrioritiesForSellFactoredTrades(factoredTrades);
+            //Save Factored Trades
+            SaveData(factoredTrades, currentDateTime);
+
+            _logger.Info.Write(string.Format("End: CreateFactoredTradesForCurrentReportDateBackdaySettledTrades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                  _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Create Factored Trades For Current ReportDate Backday Settled Trades", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, endpoint);
+
+        }
+
+        
+        #endregion
+    }
+}
