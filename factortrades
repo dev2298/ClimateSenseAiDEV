@@ -1,0 +1,234 @@
+using NAV.Common.Logging;
+using Nav.FactoredTradeService.BusinessLogic;
+using Nav.FactoredTradeService.Data;
+using Nav.FactoredTradeService.DAL;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using NAV.PNL.Data.Common;
+using NAV.Common.Data;
+using System.Data.SqlClient;
+using System.Data;
+using Newtonsoft.Json;
+using NAV.MasterServiceClient;
+using NAV.MasterServiceBusinessObjects.Filters;
+using NAV.Common.Extensions;
+using System.Threading.Tasks;
+
+namespace Nav.FactoredTradeService
+{
+    public class FactoredTrades
+    {
+        #region Variables and Datasets and Predicates
+
+        protected ILogger _logger;
+        protected List<PricingFactorData> _clientPricingFactors;
+        protected List<EntityProcessConfiguration> _clientSettings;
+        protected List<ClientBrokerMappingForPRCFactor> clientBrokerMapping;
+        protected DateTime _reportDate;
+        protected List<int> _lstProdIDs;
+        protected List<AccountProductCurrency> _lstCurrAccountProdCurrencies;
+        protected int _accountID;
+        protected List<PendingPnl> _pendingPnlList;
+        protected RequestParameters _reqParamater;
+        protected List<TradeStatus> _tradeStatusList;
+        protected List<Trade> _pairedTradesList;
+        protected List<Trade> _originalTradesList;
+        protected string _folderName;
+        protected PrevDayPositionTradesAndPairing _prevDayPositionTradesAndPairingForAllProds;
+        public Guid primaryOperationId;
+        private bool _isMasterDecouplingApplicable;
+        private ProductServiceClient _productServiceClient;
+        private static readonly object _productClientLock = new object();
+
+        Predicate<(List<PricingFactorData> pricingFactorDataList, DateTime reportDate, int currentProdID)> HasCurrentDatePricingFactorChanged =
+            delegate ((List<PricingFactorData> pricingFactorDataList, DateTime reportDate, int currentProdID) tpl)
+        {
+            if (tpl.pricingFactorDataList.Select(x => x.ProductID).Distinct().Contains(tpl.currentProdID) &&
+               tpl.pricingFactorDataList.Where(x => x.ProductID == tpl.currentProdID).Aggregate((prevItem, nextItem) => prevItem.ValidFrom < nextItem.ValidFrom ? prevItem : nextItem).ValidFrom <= tpl.reportDate
+              )
+            {
+
+                return !(tpl.pricingFactorDataList.Where(x => (tpl.reportDate >= x.ValidFrom && tpl.reportDate <= x.ValidTo) && x.ProductID == tpl.currentProdID).FirstOrDefault().PricingFactor.Equals(
+                  (tpl.pricingFactorDataList.Where(x => (tpl.reportDate.AddDays(-1) >= x.ValidFrom && tpl.reportDate.AddDays(-1) <= x.ValidTo) && x.ProductID == tpl.currentProdID).FirstOrDefault()?.PricingFactor ?? 1)));
+            }
+            else
+            {
+                return false;
+            }
+        };
+
+        #endregion
+
+        #region Constructor
+        private FactoredTrades(List<PricingFactorData> clientPricingFactors, DateTime reportDate, List<int> lstProdIDs, int accountID, List<PendingPnl> pendingPnlList,
+         List<AccountProductCurrency> lstCurrAccountProdCurrencies, RequestParameters reqParamater, List<EntityProcessConfiguration> clientSettings, string folderName, ILogger logger, bool isMasterDecouplingApplicable, ProductServiceClient productServiceClient)
+        {
+            this._logger = logger;
+            this._clientPricingFactors = clientPricingFactors;
+            this._reportDate = reportDate;
+            this._lstProdIDs = lstProdIDs;
+            this._accountID = accountID;
+            this._pendingPnlList = pendingPnlList;
+            this._lstCurrAccountProdCurrencies = lstCurrAccountProdCurrencies;
+            this._reqParamater = reqParamater;
+            this._clientSettings = clientSettings;
+            this._folderName = folderName;
+            this._productServiceClient = productServiceClient;
+            this._isMasterDecouplingApplicable = isMasterDecouplingApplicable;
+        }
+        #endregion
+
+        #region Public methods
+
+        public void Process(object factoredTradesLock)
+        {
+            List<int> lstRequiredProducts = _clientPricingFactors.Select(x => x.ProductID).Distinct().ToList();
+
+            List<int> lstEligibleProdsForFactoredTradeProcess = new List<int>();
+
+            List<AccountProductCurrency> lstAccProdCurr = new List<AccountProductCurrency>();
+            
+            //Loop through all eligible items 
+            lstRequiredProducts.ForEach(currentProdID =>
+            {
+                var prodItemForCurrentDate = _clientPricingFactors.Where(x => (_reportDate >= x.ValidFrom && _reportDate <= x.ValidTo) && x.ProductID == currentProdID);
+
+                if (prodItemForCurrentDate != null && prodItemForCurrentDate.Count() > 0)
+                {
+                    if (HasCurrentDatePricingFactorChanged((_clientPricingFactors, _reportDate, currentProdID)))
+                    {
+                        lstEligibleProdsForFactoredTradeProcess.Add(currentProdID);
+                        if (_lstProdIDs.Contains(0))
+                        {
+                            lstAccProdCurr.Add(new AccountProductCurrency(_accountID, currentProdID, 0 ));
+                        }
+                        else
+                        {
+                            List<int> lstCurrProdCurrencies = _lstCurrAccountProdCurrencies.Where(a => (a.ProductID ?? 0) == currentProdID).Select(b => (b.CurrencyID ?? 0))?.Distinct()?.ToList();
+
+                            if (lstCurrProdCurrencies.Contains(0))
+                            {
+                                lstAccProdCurr.Add(new AccountProductCurrency(_accountID, currentProdID, 0));
+                            }
+                            else
+                            {
+                                foreach (int curr in lstCurrProdCurrencies)
+                                {
+                                    lstAccProdCurr.Add(new AccountProductCurrency(_accountID, currentProdID, curr));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            );
+
+            if(_isMasterDecouplingApplicable)
+            {
+                FetchTradesAndPosition(lstAccProdCurr);
+            }
+            else
+            {
+                GetTradesAndPosition(lstAccProdCurr);
+            }
+
+            foreach (int prodID in lstEligibleProdsForFactoredTradeProcess)
+            {
+                
+                    GenerateFactorTrades(prodID);
+    
+            }
+        }
+
+
+        public void GetTradesAndPosition(List<AccountProductCurrency> lstAccProdCurr)
+        {
+            string accProdCurrencies = JsonConvert.SerializeObject(lstAccProdCurr);
+
+            _logger.Info.Write(string.Format("Start: FillTradesAndPosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                     _reqParamater.clientID, _reportDate, _accountID, accProdCurrencies));
+
+            _prevDayPositionTradesAndPairingForAllProds = PrevDayPositionTradesAndPairing.CreateObject(_reqParamater.connectionString, _reqParamater.clientID, _reportDate, accProdCurrencies,
+                 _accountID, _folderName, _reqParamater, "GetPortfolioDataForFactoredTradesCalculation");
+
+            _logger.Info.Write(string.Format("End: FillTradesAndPosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                    _reqParamater.clientID, _reportDate, _accountID, accProdCurrencies));
+        }
+
+
+        public void FetchTradesAndPosition(List<AccountProductCurrency> lstAccProdCurr)
+        {
+            string accProdCurrencies = JsonConvert.SerializeObject(lstAccProdCurr);
+
+            _logger.Info.Write(string.Format("Start: FetchTradesAndPosition FillTradesAndPosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                     _reqParamater.clientID, _reportDate, _accountID, accProdCurrencies));
+
+            _prevDayPositionTradesAndPairingForAllProds = PrevDayPositionTradesAndPairing.CreateObject(_reqParamater.connectionString, _reqParamater.clientID, _reportDate, accProdCurrencies,
+                 _accountID, _folderName, _reqParamater, "FetchPortfolioDataForFactoredTradesCalculation");
+
+            _prevDayPositionTradesAndPairingForAllProds._prodSettingsList = FillProdSettings(_prevDayPositionTradesAndPairingForAllProds._prodSettingsList, _reqParamater.clientID, _reqParamater.connectionString);
+
+
+            _logger.Info.Write(string.Format("End: FetchTradesAndPosition FillTradesAndPosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                    _reqParamater.clientID, _reportDate, _accountID, accProdCurrencies));
+        }
+
+        private List<ProdSettings> FillProdSettings(List<ProdSettings> prodSettingsList, int clientid, string connection)
+        {
+            var prodSettings = new List<ProdSettings>();
+            var prodIds = string.Join(",", prodSettingsList.Select(s => s.ProductID));
+            if (!prodIds.Any())
+                return prodSettings;
+
+            var products = _productServiceClient.GetProductsForFilterCriteria(new ProductFilter { Ids = prodIds }, clientid, connection).ToDictionary(d => d.ProdID);
+
+
+            foreach(var prodSetting in prodSettingsList)
+            {
+                if(products.ContainsKey(prodSetting.ProductID) )
+                {
+                    prodSettings.Add(new ProdSettings
+                    {
+                        SourceProdMultiplier = products[prodSetting.ProductID].Multiplier,
+                        SourceProdTickValue = Convert.ToDouble( products[prodSetting.ProductID].TickValue),
+                        ProductID = prodSetting.ProductID,
+                    }); ;
+
+                }
+            }
+
+            return prodSettings;
+
+        }
+
+        public void GenerateFactorTrades(int currentProdID)
+        {
+            string factoredTradeMethodSetting = Convert.ToString(_clientSettings?.Where(x => x.EntityProcessConfigType == EntityProcesses.FACTORTRADEMETHOD.ToString()).FirstOrDefault()?.ProcessTypeValue);
+
+            if (!string.IsNullOrWhiteSpace(factoredTradeMethodSetting))
+            {
+                FactoredTradesFactory methodFactory = new ConcreteFactoredTradesFactory();
+
+                IFactoredTradeMethods factorTradeMethod = methodFactory.GetFactoredTradeMethod(factoredTradeMethodSetting, _logger, _clientPricingFactors, _clientSettings, _reportDate, currentProdID, _accountID,
+                    _pendingPnlList, _folderName, _reqParamater);
+                factorTradeMethod.primaryOperationId = primaryOperationId;
+                factorTradeMethod.FillTradesAndPosition(_prevDayPositionTradesAndPairingForAllProds);
+                factorTradeMethod.CalculateFactoredTrades();
+            }
+
+        }
+
+        public static FactoredTrades CreateObject(DateTime reportDate, List<int> lstProdIDs, int accountID, List<PendingPnl> pendingPnlList, List<AccountProductCurrency> lstCurrAccountProdCurrencies,
+           RequestParameters reqParamater, List<EntityProcessConfiguration> entityProcessConfigurations, List<ClientBrokerMappingForPRCFactor> clientBrokerMapping,
+           string folderName, ILogger logger, bool isMasterDecouplingApplicable, ProductServiceClient productServiceClient)
+        {
+            List<PricingFactorData> clientPricingFactors = GetClientPricingFactors.FetchClientPricingFactors(reqParamater, lstProdIDs, reportDate, clientBrokerMapping);
+
+            var obj = new FactoredTrades(clientPricingFactors, reportDate, lstProdIDs, accountID, pendingPnlList, lstCurrAccountProdCurrencies, reqParamater, entityProcessConfigurations, folderName, logger, isMasterDecouplingApplicable, productServiceClient);
+            return obj;
+        }
+        #endregion
+    }
+}
+
