@@ -1,0 +1,37 @@
+using NAV.Common.Attributes;
+using NAV.Data;
+using NAV.PNL.Data.Common;
+using System;
+using System.Data;
+using System.Text.RegularExpressions;
+
+namespace Nav.FactoredTradeService.DAL
+{
+    public class AutoGeneratePosition : StoreProcedure
+    {
+        [Parameter("@reportDate", SqlDbType.DateTime, ParameterDirection.Input)]
+        public DateTime ReportDate { get; set; }
+
+        [Parameter("@clientID", SqlDbType.Int, ParameterDirection.Input)]
+        public int ClientID { get; set; }
+
+        [Parameter("@prodID", SqlDbType.Int, ParameterDirection.Input)]
+        public int ProdID { get; set; }
+
+        [Parameter("@accountIDs", SqlDbType.NVarChar, ParameterDirection.Input)]
+        public string AccountIDs { get; set; }
+
+        [Parameter("@returnValue", SqlDbType.Int, ParameterDirection.ReturnValue)]
+        public int ReturnValue { get; set; }
+
+        //Auto Generate Position
+        public AutoGeneratePosition(DateTime reportDate, int clientID, int prodID, int accountID, RequestParameters req,string procedureName):
+            base(req.connectionString, procedureName, "", req)
+        {
+            this.ReportDate = reportDate;
+            this.ClientID = clientID;
+            this.ProdID = prodID;
+            this.AccountIDs = Convert.ToString(accountID);
+        }
+    }
+}
