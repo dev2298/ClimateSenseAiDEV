@@ -1,0 +1,657 @@
+using NAV.Common.Logging;
+using Nav.FactoredTradeService.Data;
+using Nav.FactoredTradeService.DAL;
+using System;
+using System.Collections.Generic;
+using NAV.PNL.Data.Common;
+using NAV.PNL.DataAccess.Set;
+using System.Linq;
+using NAV.Data;
+using System.Data.SqlClient;
+using System.Data;
+using TradePosition = Nav.FactoredTradeService.Data.TradePosition;
+using AutoMapper;
+using NavFactoredServiceDeployment.BusinessLogic;
+using Newtonsoft.Json;
+using System.ServiceModel;
+
+
+namespace Nav.FactoredTradeService.BusinessLogic
+{
+    public abstract class FactoredTradeMethods : IFactoredTradeMethods
+    {
+        #region variable and data sets
+        protected ILogger _logger;
+        protected List<PricingFactorData> _clientPricingFactors;
+        protected List<EntityProcessConfiguration> _clientSettings;
+        protected DateTime _reportDate;
+        protected int _prodID;
+        protected int _accountID;
+        protected List<PendingPnl> _pendingPnlList;
+        protected RequestParameters _reqParamater;
+        protected ProdWisePositionAndTrades _prevDayPositionTradesAndPairing = new ProdWisePositionAndTrades();
+        protected Logger _klogger;
+        //protected Guid primaryOperationId;
+        protected Guid operationId;
+        public static string FACTOREDTRADESERVICE = "FactoredTradeService";
+        protected string _folderName;
+        protected const int CONST_DEFAULT_BACK_DAYS_FOR_FACTORDE_TRADES = 25;
+        protected string endpoint = OperationContext.Current?.EndpointDispatcher?.EndpointAddress?.ToString();
+
+        public virtual Guid primaryOperationId { get; set; }
+        #endregion
+
+        #region Public Methods & Constructor
+        public FactoredTradeMethods(ILogger logger, List<PricingFactorData> clientPricingFactors, List<EntityProcessConfiguration> clientSettings,
+            DateTime reportDate, int prodID, int accountID, List<PendingPnl> pendingPnlList, string folderName, RequestParameters reqParamater)
+        {
+            this._logger = logger;
+            this._clientPricingFactors = clientPricingFactors;
+            this._clientSettings = clientSettings;
+            this._reportDate = reportDate;
+            this._prodID = prodID;
+            this._accountID = accountID;
+            this._pendingPnlList = pendingPnlList;
+            this._reqParamater = reqParamater;
+            this._folderName = folderName;
+            _klogger = Logger.Instance;
+        }
+
+        //Fills all Data Sets required for Factored Trades Creation
+        public void FillTradesAndPosition(PrevDayPositionTradesAndPairing prevDayPositionTradesAndPairingForAllProds)
+        {
+            _prevDayPositionTradesAndPairing._prodID = _prodID;
+            _prevDayPositionTradesAndPairing._previousDayPositionList = prevDayPositionTradesAndPairingForAllProds._previousDayPositionList.Where(y => y.ProductID == _prodID).ToList();
+            _prevDayPositionTradesAndPairing._currentReportDateAndBackDateSettledTradesList = prevDayPositionTradesAndPairingForAllProds._currentReportDateAndBackDateSettledTradesList.Where(y => y.ProductID == _prodID).ToList();
+            _prevDayPositionTradesAndPairing._originalTradesList = prevDayPositionTradesAndPairingForAllProds._originalTradesList.Where(y => y.ProductID == _prodID).ToList();
+            _prevDayPositionTradesAndPairing._shadowClientAccountMappingList = prevDayPositionTradesAndPairingForAllProds._shadowClientAccountMappingList;
+            _prevDayPositionTradesAndPairing._prodSettingsList = prevDayPositionTradesAndPairingForAllProds._prodSettingsList.Where(y => y.ProductID == _prodID).ToList();
+        }
+
+
+        public virtual void CalculateFactoredTrades() { }
+
+        public virtual void CreateFactoredTradesForFutureSettledPNSTrades(List<TradePosition> tradePositionList, double currentPricingFactor, double previousPricingFactor,
+           double sourceProdMultiplier, double sourceProdTickValue)
+        { }
+
+        public virtual void CreateFactoredTradesForCurrentReportDateBackdaySettledTrades(List<Trade> currentReportDateActualTrades, double currentPricingFactor, double previousPricingFactor,
+        double sourceProdMultiplier, double sourceProdTickValue)
+        { }
+
+
+        #endregion
+        #region Private Methods
+
+
+        //Removes original future trades
+        public List<Trade> FilterOriginalTradesForFactoredTradesCreation(List<Trade> originalTrades, List<TradeStatus> previousDayPositionList,
+            List<Trade> currentReportDateAndBackDateSettledTradesList)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+            _logger.Info.Write(string.Format("Start: FilterOriginalTradesForFactoredTradesCreation: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                     _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            List<Trade> originalTradesDeepCopy = originalTrades.ConvertAll(x => (Trade)x.Clone());
+            //Remove those Original Trades whose settlement date is in future or on current report date
+
+            if (currentReportDateAndBackDateSettledTradesList != null && currentReportDateAndBackDateSettledTradesList.Count() > 0)
+            {
+
+                var cancelTXNCodes = new List<string> { "BY-CXL", "SL-CXL", "CS-CXL", "SS-CXL" };
+                List<Trade> currentReportDateCancelTrades = currentReportDateAndBackDateSettledTradesList.Where(y => cancelTXNCodes.Contains(y.TxnCode))?.ToList();
+
+                if (currentReportDateCancelTrades != null && currentReportDateCancelTrades.Count() > 0)
+                {
+                    List<int> originalTradeIDs = currentReportDateCancelTrades.Select(x => x.OriginalTradeID ?? 0).ToList();
+
+
+                    List<TradeStatus> cancelledOriginalTradeItems = previousDayPositionList.Where(x => originalTradeIDs.Contains(x.TradeID1 ?? 0)).ToList();
+
+                    if (cancelledOriginalTradeItems != null && cancelledOriginalTradeItems.Count() > 0)
+                    {
+                        List<int> tradeIDsForCheck = cancelledOriginalTradeItems.Select(x => x.TradeID1 ?? 0).ToList();
+                        foreach (int tradeIDForCheck in tradeIDsForCheck)
+                        {
+                            List<TradeStatus> positionItemsForCheck = cancelledOriginalTradeItems.Where(z => (z.TradeID1 ?? 0) == tradeIDForCheck).ToList();
+
+                            double totalPositionQuantity = positionItemsForCheck.Select(v => v.Quantity ?? 0).Sum();
+
+                            double currentDateCancelTradeQuantity = currentReportDateCancelTrades.Where(x => (x.OriginalTradeID ?? 0) == tradeIDForCheck).FirstOrDefault().Quantity;
+
+                            if (Math.Abs(totalPositionQuantity) == Math.Abs(currentDateCancelTradeQuantity))
+                            {
+                                originalTradesDeepCopy.RemoveAll(s => s.TradeID == tradeIDForCheck);
+                            }
+                        }
+                    }
+                }
+            }
+            originalTradesDeepCopy = originalTradesDeepCopy.Where(x => x.SettlementDate < _reportDate)?.ToList();
+
+            _logger.Info.Write(string.Format("End: FilterOriginalTradesForFactoredTradesCreation: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                    _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Filter Original Trades For Factored Trades Creation", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+            return originalTradesDeepCopy;
+        }
+
+
+        public List<Trade> FilterCurrentDayBackDateTradesForFactoredTradesCreation(List<Trade> currentReportDateAndBackDateSettledTradesList)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            _logger.Info.Write(string.Format("Start: FilterCurrentDayBackDateTradesForFactoredTradesCreation: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                     _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            List<Trade> currentReportDateAndBackDateSettledTradesDeepCopy = new List<Trade>();
+            List<Trade> currentReportDateActualTrades = new List<Trade>();
+
+            //Remove those Original Trades whose settlement date is in future or on current report date
+
+            if (currentReportDateAndBackDateSettledTradesList != null && currentReportDateAndBackDateSettledTradesList.Count() > 0)
+            {
+                currentReportDateAndBackDateSettledTradesDeepCopy = currentReportDateAndBackDateSettledTradesList.ConvertAll(x => (Trade)x.Clone());
+
+
+                var cancelTXNCodes = new List<string> { "BY-CXL", "SL-CXL", "CS-CXL", "SS-CXL" };
+                List<Trade> currentReportDateCancelTrades = currentReportDateAndBackDateSettledTradesDeepCopy.Where(y => cancelTXNCodes.Contains(y.TxnCode))?.ToList();
+
+                if (currentReportDateCancelTrades != null && currentReportDateCancelTrades.Count() > 0)
+                {
+                    List<int> originalTradeIDs = currentReportDateCancelTrades.Select(x => x.OriginalTradeID ?? 0).ToList();
+
+
+                    List<Trade> cancelledOriginalTradeItems = currentReportDateAndBackDateSettledTradesDeepCopy.Where(x => originalTradeIDs.Contains(x.TradeID)).ToList();
+
+                    if (cancelledOriginalTradeItems != null && cancelledOriginalTradeItems.Count() > 0)
+                    {
+                        List<int> tradeIDsForCheck = cancelledOriginalTradeItems.Select(x => x.TradeID).ToList();
+                        foreach (int tradeIDForCheck in tradeIDsForCheck)
+                        {
+                            List<Trade> tradeItemsForCheck = cancelledOriginalTradeItems.Where(z => z.TradeID == tradeIDForCheck).ToList();
+
+                            double totalQuantity = tradeItemsForCheck.Select(v => v.Quantity).Sum();
+
+                            double currentDateCancelTradeQuantity = currentReportDateCancelTrades.Where(x => (x.OriginalTradeID ?? 0) == tradeIDForCheck).FirstOrDefault().Quantity;
+
+                            if (Math.Abs(totalQuantity) == Math.Abs(currentDateCancelTradeQuantity))
+                            {
+                                currentReportDateAndBackDateSettledTradesDeepCopy.RemoveAll(s => s.TradeID == tradeIDForCheck);
+                            }
+                        }
+                    }
+                }
+
+                var tradeTXNCodes = new List<string> { "BY", "SL", "CS", "SS" };
+                currentReportDateActualTrades = currentReportDateAndBackDateSettledTradesDeepCopy.Where(y => tradeTXNCodes.Contains(y.TxnCode))?.ToList();
+            }
+
+
+
+            _logger.Info.Write(string.Format("End: FilterCurrentDayBackDateTradesForFactoredTradesCreation: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                    _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+
+            var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Filter Current Day BackDate Trades For FactoredTrades Creation", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+            return currentReportDateActualTrades;
+        }
+
+        //Save Factored Trades
+        public void SaveData(List<Trade> tradeList, DateTime currentDateTime)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+            _logger.Info.Write(string.Format("Start: SaveData - Factored Trades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                  _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+
+            double GetFetchIDs(double tradeCount)
+            {
+                FetchIDDetails fetchIDDetails = new FetchIDDetails(_reqParamater, "TRADE_DETAIL", tradeCount, "MiddleWare");
+                fetchIDDetails.ExecuteNonQuery();
+                if (fetchIDDetails.ReturnValue != 0)
+                {
+                    throw new Exception("There in some problem in fetching trade id");
+                }
+                return fetchIDDetails.maxID;
+            }
+
+
+            //Generate IDs
+            int maxTradeID = (int)GetFetchIDs(tradeList.Count);
+            UpdateTradeID(tradeList, (maxTradeID - tradeList.Count));
+
+            //Updating Trade IDs
+            void UpdateTradeID(List<Trade> tradeListLocal, int countId)
+            {
+                foreach (Trade trade in tradeListLocal)
+                {
+                    trade.TradeID = countId;
+                    countId++;
+                }
+            }
+
+            var config = new MapperConfiguration(cfg =>
+            {
+                cfg.CreateMap<Trade, TradeTable>();
+            });
+
+            IMapper iMapper = config.CreateMapper();
+
+            List<TradeTable> tradeSaveList = iMapper.Map<List<Trade>, List<TradeTable>>(tradeList.ToList()).ToList();
+
+
+            //Bulk Insert
+            using (SqlConnection conn = new SqlConnection(_reqParamater.connectionString))
+            {
+                try
+                {
+                    if (conn.State == ConnectionState.Closed)
+                        conn.Open();
+
+                    if (tradeSaveList != null)
+                    {
+                        BulkCopy<TradeTable> objBulkCopy = new BulkCopy<TradeTable>(conn, tradeSaveList, _logger,_reqParamater);
+                        objBulkCopy.BulkInsert(true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Critical("Problem in Trade Detail Bulk Save of Factored Trades ", _reqParamater.Prameters, ex);
+                    _klogger.LogErrorMessage(_reqParamater.clientID, ex.ToString(), "Problem in Trade Detail Bulk Save of Factored Trades ", primaryOperationId, operationId, _reportDate, 1, 0, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+                    throw ex;
+                }
+                finally
+                {
+                    if (conn.State == ConnectionState.Open)
+                        conn.Close();
+                }
+            }
+
+            //Save Trade-Date Mapping
+
+            CreateAndSaveDateWiseFactoredTradeMapping(tradeList, currentDateTime);
+
+            _logger.Info.Write(string.Format("End: SaveData - Factored Trades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                  _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Save- Factored Trades Data", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+        }
+
+        //Save PNS Priorities
+        public void SavePNSPriorities(List<PNSPriorities> pnsPriorities)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            _logger.Info.Write(string.Format("Start: SavePNSPriorities: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                  _reqParamater.clientID, _reportDate, _accountID, _prodID));
+            using (SqlConnection conn = new SqlConnection(_reqParamater.connectionString))
+            {
+                try
+                {
+                    if (conn.State == ConnectionState.Closed)
+                        conn.Open();
+
+                    if (pnsPriorities != null)
+                    {
+                        BulkCopy<PNSPriorities> objBulkCopy = new BulkCopy<PNSPriorities>(conn, pnsPriorities, _logger,_reqParamater);
+                        objBulkCopy.BulkInsert(true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Critical("Problem in PNS Priorities Bulk Save of Factored Trades ", _reqParamater.Prameters, ex);
+                    _klogger.LogErrorMessage(_reqParamater.clientID, ex.ToString(), "Problem in PNS Priorities Bulk Save of Factored Trades",  primaryOperationId, operationId, _reportDate, 1, 0, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+                    throw ex;
+                }
+                finally
+                {
+                    if (conn.State == ConnectionState.Open)
+                        conn.Close();
+                }
+            }
+            _logger.Info.Write(string.Format("End: SavePNSPriorities: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Save PNS Priorities", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+        }
+
+        //Save Trade Extensions
+        public void SaveTradesExtension(List<TradesExtension> tradesExtensions)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            _logger.Info.Write(string.Format("Start: SaveTradesExtension: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                  _reqParamater.clientID, _reportDate, _accountID, _prodID));
+            using (SqlConnection conn = new SqlConnection(_reqParamater.connectionString))
+            {
+                try
+                {
+                    if (conn.State == ConnectionState.Closed)
+                        conn.Open();
+
+                    if (tradesExtensions != null)
+                    {
+                        BulkCopy<TradesExtension> objBulkCopy = new BulkCopy<TradesExtension>(conn, tradesExtensions, _logger,_reqParamater);
+                        objBulkCopy.BulkInsert(true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Critical("Problem in Trade Extensions Bulk Save of Factored Trades ", _reqParamater.Prameters, ex);
+                    _klogger.LogErrorMessage(_reqParamater.clientID, ex.ToString(), "Problem in Trade Extensions Bulk Save of Factored Trades ",  primaryOperationId, operationId, _reportDate, 1, 0, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+                    throw ex;
+                }
+                finally
+                {
+                    if (conn.State == ConnectionState.Open)
+                        conn.Close();
+                }
+            }
+            _logger.Info.Write(string.Format("End: SaveTradesExtension: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Save Trades Extension", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+        }
+
+        //Generate PNS Priorities
+        public void CreateAndSavePNSPriorities(List<Trade> factoredTrades, DateTime currentDateTime)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            _logger.Info.Write(string.Format("Start: CreateAndSavePNSPriorities: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, _accountID, _prodID));
+            //Create PNS Priority
+            List<PNSPriorities> pnsPriorities = factoredTrades.Select(e => new PNSPriorities
+            {
+                ReportDate = e.ReportDate,
+                AccountID = e.AccountID,
+                CurrID = e.CurrencyID,
+                ProdID = e.ProductID,
+                PriorityLevel1 = "T",
+                TradeID1 = e.ActualTradeID,
+                PriorityLevel2 = "P",
+                TradeID2 = e.TradeID,
+                Quantity = e.Quantity,
+                IsActive = 1,
+                VersionDate = currentDateTime,
+                VersionSource = "System"
+            }
+            ).ToList();
+
+            SavePNSPriorities(pnsPriorities);
+            _logger.Info.Write(string.Format("End: CreateAndSavePNSPriorities: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Create And Save PNS Priorities", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+        }
+
+
+
+        public void CreateAndSaveDateWiseFactoredTradeMapping(List<Trade> factoredTrades, DateTime currentDateTime)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            _logger.Info.Write(string.Format("Start: CreateAndSaveDateWiseFactoredTradeMapping: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, _accountID, _prodID));
+            //Create PNS Priority
+            List<DateWiseFactoredTrades> dateWiseFactoredTradesMappings = factoredTrades.Select(e => new DateWiseFactoredTrades
+            {
+                ReportDate = e.ReportDate,
+                ClientID = e.ClientID,
+                AccountID = e.AccountID,
+                ProdID = e.ProductID,
+                CurrID  =   e.CurrencyID,
+                TradeID = e.TradeID,
+                VersionDate = currentDateTime,
+                VersionSource = "PNL"
+            }
+            ).ToList();
+
+            SaveDateWiseFactoredTradeMapping(dateWiseFactoredTradesMappings);
+            _logger.Info.Write(string.Format("End: CreateAndSaveDateWiseFactoredTradeMapping: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Create And Save DateWise FactoredTrade Mapping", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+        }
+
+
+
+        public void SaveDateWiseFactoredTradeMapping(List<DateWiseFactoredTrades> dateWiseFactoredTradesMappings)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+            _logger.Info.Write(string.Format("Start: SaveDateWiseFactoredTradeMapping: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                  _reqParamater.clientID, _reportDate, _accountID, _prodID));
+            using (SqlConnection conn = new SqlConnection(_reqParamater.connectionString))
+            {
+                try
+                {
+                    if (conn.State == ConnectionState.Closed)
+                        conn.Open();
+
+                    if (dateWiseFactoredTradesMappings != null)
+                    {
+                        BulkCopy<DateWiseFactoredTrades> objBulkCopy = new BulkCopy<DateWiseFactoredTrades>(conn, dateWiseFactoredTradesMappings, _logger,_reqParamater);
+                        objBulkCopy.BulkInsert(true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Critical("Problem in Date Wise Factored Trades Mappings Bulk Save ", _reqParamater.Prameters, ex);
+                    _klogger.LogErrorMessage(_reqParamater.clientID, ex.ToString(), "Problem in Date Wise Factored Trades Mappings Bulk Save",  primaryOperationId, operationId, _reportDate, 1, 0, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+                    throw ex;
+                }
+                finally
+                {
+                    if (conn.State == ConnectionState.Open)
+                        conn.Close();
+                }
+            }
+            _logger.Info.Write(string.Format("End: SaveDateWiseFactoredTradeMapping: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Save DateWise Factored Trade Mapping", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+        }
+
+
+
+        public void SetAutoGeneratePosition()
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            _logger.Info.Write(string.Format("Start: SetAutoGeneratePosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+
+            AutoGeneratePosition autoGeneratePosition = new AutoGeneratePosition(_reportDate, _reqParamater.clientID, _prodID, _accountID, _reqParamater,
+                  "GuiAutoGeneratePositionForFactoredTrades");
+
+            autoGeneratePosition.ExecuteNonQuery();
+
+            _logger.Info.Write(string.Format("End: SetAutoGeneratePosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Set Auto Generate Position For FactoredTrades", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+        }
+
+        public void SetAutoGeneratePosition(int accID,int prodID)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            _logger.Info.Write(string.Format("Start: SetAutoGeneratePosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, accID, prodID));
+
+
+            AutoGeneratePosition autoGeneratePosition = new AutoGeneratePosition(_reportDate, _reqParamater.clientID, accID, prodID, _reqParamater,
+                  "GuiAutoGeneratePositionForFactoredTrades");
+
+            autoGeneratePosition.ExecuteNonQuery();
+
+            _logger.Info.Write(string.Format("End: SetAutoGeneratePosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, accID, prodID));
+
+            var customDetails = new { prodID = prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = accID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Set Auto Generate Position For FactoredTrades", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+        }
+
+        //public void SetAutoGeneratePosition(int accountID,int prodID)
+        //{
+        //    var startDateTime = DateTime.UtcNow;
+        //    operationId = Guid.NewGuid();
+
+        //    _logger.Info.Write(string.Format("Start: SetAutoGeneratePosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+        //        _reqParamater.clientID, _reportDate, accountID, prodID));
+
+
+        //    AutoGeneratePosition autoGeneratePosition = new AutoGeneratePosition(_reportDate, _reqParamater.clientID, prodID, accountID, _reqParamater,
+        //          "GuiAutoGeneratePositionForFactoredTrades");
+
+        //    autoGeneratePosition.ExecuteNonQuery();
+
+        //    _logger.Info.Write(string.Format("End: SetAutoGeneratePosition: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+        //        _reqParamater.clientID, _reportDate, accountID, prodID));
+
+        //    var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+        //    var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+        //    _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Set Auto Generate Position For FactoredTrades", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+        //}
+
+
+        //Generate Trade Extensions
+        public void CreateAndSaveTradesExtensions(List<Trade> factoredTrades)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            _logger.Info.Write(string.Format("Start: SaveTradeExtension: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, _accountID, _prodID));
+            //Create PNS Priority
+            List<TradesExtension> tradeExtensions = factoredTrades.Select(e => new TradesExtension
+            {
+                TradeID = e.TradeID,
+                ExchRate = e.ExchangeRate1
+            }
+            ).ToList();
+
+            SaveTradesExtension(tradeExtensions);
+            _logger.Info.Write(string.Format("End: SaveTradeExtension: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+                _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Create And Save Trades Extensions", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+        }
+
+
+
+
+        //Setting PNS Priorities based on sequence
+        public void SetPrioritiesForSellFactoredTrades(List<Trade> sellFactoredTrades)
+        {
+            var startDateTime = DateTime.UtcNow;
+            operationId = Guid.NewGuid();
+
+            _logger.Info.Write(string.Format("Start: SetPrioritiesForSellFactoredTrades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+               _reqParamater.clientID, _reportDate, _accountID, _prodID));
+            var o = sellFactoredTrades.OrderBy(x => x.TradeDate).GroupBy(x => new { x.AccountID, x.CurrencyID, x.ProductID })
+              .Select(g => new { g, count = g.Count() })
+              .SelectMany(t => t.g.Select(b => b)
+                                  .Zip(Enumerable.Range(1, t.count), (j, i) => new
+                                  {
+                                      j.AccountID,
+                                      j.ProductID,
+                                      j.CurrencyID,
+                                      j.TradeDate,
+                                      sequence = i
+                                  }));
+
+            foreach (var i in o)
+            {
+                sellFactoredTrades.Where(x => x.AccountID == i.AccountID && x.ProductID == i.ProductID
+                && x.CurrencyID == i.CurrencyID && x.TradeDate == i.TradeDate)?.ToList().ForEach(n => n.Priority = i.sequence);
+            }
+            _logger.Info.Write(string.Format("End: SetPrioritiesForSellFactoredTrades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
+               _reqParamater.clientID, _reportDate, _accountID, _prodID));
+
+            var customDetails = new { prodID = _prodID, pendingPnlListCount = _pendingPnlList != null ? _pendingPnlList.Count : 0, accountID = _accountID };
+            var serializedcustomDetails = JsonConvert.SerializeObject(customDetails);
+            _klogger.LogTraceMessage(_reqParamater.clientID, primaryOperationId, operationId, 0, _reportDate, "Set Priorities For Sell FactoredTrades", serializedcustomDetails, startDateTime, DateTime.UtcNow, FACTOREDTRADESERVICE, Environment.CurrentDirectory + " URL: " + endpoint);
+
+        }
+        #endregion
+
+    }
+
+
+    //Abstract Factory Class
+    public abstract class FactoredTradesFactory
+    {
+        public abstract IFactoredTradeMethods GetFactoredTradeMethod(string method, ILogger logger, List<PricingFactorData> clientPricingFactors, List<EntityProcessConfiguration> clientSettings,
+            DateTime reportDate, int prodID, int accountID, List<PendingPnl> pendingPnlList, string folderName, RequestParameters reqParamater);
+
+    }
+
+    //Concrete Factory Class
+    public class ConcreteFactoredTradesFactory : FactoredTradesFactory
+    {
+        public override IFactoredTradeMethods GetFactoredTradeMethod(string method, ILogger logger, List<PricingFactorData> clientPricingFactors, List<EntityProcessConfiguration> clientSettings,
+            DateTime reportDate, int prodID, int accountID, List<PendingPnl> pendingPnlList, string folderName, RequestParameters reqParamater)
+        {
+            Enum.TryParse<FactoredTradeMethodsEnum>(method, out var methodItem);
+            switch (methodItem)
+            {
+                case FactoredTradeMethodsEnum.HundredTradePriceMethod:
+                    return new HundredTradePrice(logger, clientPricingFactors, clientSettings, reportDate, prodID, accountID, pendingPnlList, folderName, reqParamater);
+                case FactoredTradeMethodsEnum.TaxLotMethod:
+                    return new TaxLot(logger, clientPricingFactors, clientSettings, reportDate, prodID, accountID, pendingPnlList, folderName, reqParamater);
+                default:
+                    throw new ApplicationException(string.Format("Method '{0}' cannot be created", method));
+            }
+        }
+
+    }
+}
