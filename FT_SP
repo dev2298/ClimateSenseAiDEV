@@ -1,0 +1,86 @@
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/************************************************************************************
+Procedure Name		:	GuiAutoGeneratePositionForFactoredTrades
+Objective		:       Create Auto Generate Position for Factored Trades
+Author			:	Lokesh Bajaj
+Create Date		:	16th Sep 2020
+Modified By		:	
+Modified Date		:	
+Algorithm and other Details:
+************************************************************************************/
+CREATE PROCEDURE [dbo].GuiAutoGeneratePositionForFactoredTrades
+(
+	@reportDate		DATETIME,
+	@prodID			INT,
+	@clientID		INT,
+	@accountIDs		NVARCHAR(MAX)
+)
+AS
+BEGIN
+	BEGIN TRY
+		SET NOCOUNT ON
+
+		DECLARE @brokerID INT
+
+		CREATE TABLE #accounts(AccountID INT)
+
+
+		INSERT	#accounts (AccountID)
+		SELECT	DISTINCT
+			AccountID	=	Data
+		FROM	dbo.fnSplit(dbo.fntrimspaces(@accountIDs),',')	A
+
+
+		SELECT	@brokerID	=	C.Broker_id
+		FROM	Client_Database_master	C	WITH(NOLOCK)
+		INNER JOIN
+			Database_Master		D	WITH(NOLOCK)
+		ON	C.Database_id	=	D.Database_id
+		AND	D.is_archival_database	= 0
+		AND	C.client_id	=	@clientID
+
+
+		SELECT	report_date	=	@reportDate,
+			client_id	=	@clientID,
+			broker_id	=	@brokerID,
+			acc_id		=	td.acc_id,
+			curr_id		=	td.curr_id,
+			prod_id		=	td.prod_id,
+			quantity	=	SUM(TD.Quantity)
+		INTO	#trades_to_generate_positions 
+		FROM	 trade_detail TD WITH(NOLOCK) 
+		INNER JOIN 
+			#accounts A
+		ON  TD.acc_id = A.AccountID
+		AND (TD.prod_id = @prodID 
+			OR 
+			ISNULL(@prodID, 0) = 0) 
+		WHERE	TD.source	=	'N' 
+		AND	TD.report_date =	@reportDate
+		AND	TD.Client_Id = @clientID
+		GROUP BY TD.acc_id,TD.curr_id,TD.prod_id
+
+		EXEC Generate_Positions @report_date		=	@ReportDate, 
+					@client_id		=	@ClientID, 
+					@broker_id		=	@brokerID,
+					@acc_id			=	NULL,
+					@source			=	'C',
+					@update_from_source2	=	NULL,
+					@source2		=	NULL,
+					@specific_products	=	1,
+					@flag			=	1,
+					@version_source		=	'Autogenerate position'
+
+
+		RETURN 0
+
+		SET NOCOUNT OFF
+	END TRY
+	BEGIN CATCH
+
+		EXEC RethrowError;
+
+		RETURN -1
+
+	END CATCH
+END
