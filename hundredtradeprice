@@ -236,7 +236,7 @@ namespace Nav.FactoredTradeService.BusinessLogic
                 }
 
                 SetAutoGeneratePosition();
-                AutoGenQueue.Enqueue(_accountID, _prodID);
+                //AutoGenQueue.Enqueue(_accountID, _prodID);
             }
 
             _logger.Info.Write(string.Format("End: HunderedTradePrice - CalculateFactoredTrades: clientID = {0}, reportDate = {1}, accountIDs = {2}, prodID = {3}",
