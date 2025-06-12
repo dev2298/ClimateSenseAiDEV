@@ -1,0 +1,6 @@
+-- Option 2: stay in your current DB and fully-qualify the view
+SELECT  s.name  AS schema_name,
+        t.name  AS table_name
+FROM    [Main2BoothBay].sys.tables   AS t
+JOIN    [Main2BoothBay].sys.schemas  AS s ON s.schema_id = t.schema_id
+WHERE   t.name LIKE '%Factor%';
