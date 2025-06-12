@@ -1,0 +1,4 @@
+Rebuilding filteredTrades & currentReportDateActualTrades doubles the DB and CPU work you were trying to avoid.
+if ((filteredTrades != null && filteredTrades.Count() > 0) ||
+    (currentReportDateActualTrades != null && currentReportDateActualTrades.Count() > 0))
+{
