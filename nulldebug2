@@ -1,0 +1,2 @@
+INSERT INTO #tempFileSetupTradesDetailData (TradeID, Source, Status, ClientID, BrokerID, ReportDate, TradeDate, AccountID, CurrencyID, Currency, ProductID)
+VALUES (-999, 'B', 'E', @clientID, @brokerID, @reportDate, @reportDate, 12345, NULL, NULL, 98765);
