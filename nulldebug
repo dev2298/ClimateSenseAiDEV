@@ -1,0 +1,2417 @@
+
+/**************************************************************************  
+Procedure Name : SavePostTransformationsProcessesdData  
+Objective  : Objective of procedure is to savedata in permanent and pending tables after execution of post transformations  
+Author   : Saloni Gupta  
+Create Date  : 15th March 2024  
+Modified By  : Saloni Gupta  
+Modified Date : 2nd April 2025
+Database  :  Client  
+Input Parameters:  
+Algorithm and other details:  
+Test Run:  
+*****************************************************************************/  
+CREATE   PROC SavePostTransformationsProcessesdData  
+(   
+ @isCalledFrom  TINYINT,  
+ @readPartialData TINYINT  = NULL,  
+ @readFromStaging TINYINT = 0 , --- 0 : true , 1: false         
+ @packageID  INTEGER  = NULL, --Will Contain Value when Multiprocess is run or data is posted from pending screens  
+ @reportDate  DATETIME  = NULL, --Will Contain Value when Multiprocess is run and @isCalledFrom = 1  
+ @clientID  INTEGER  = NULL, --Will Contain Value when Multiprocess is run and @isCalledFrom = 1  
+ @brokerID  INTEGER  = NULL, --Will Contain Value when Multiprocess is run and @isCalledFrom = 1  
+ @source   VARCHAR(2) = NULL, --Will Contain Value when Multiprocess is run and @isCalledFrom = 1  
+ @sourceForIFDCalculation  VARCHAR(10) = NULL,  
+ @clientType   CHAR(1),  
+ @indexRatioXML  XML = NULL,       
+ @mainProdMasterDataXML XML = NULL,  
+ @ProdMasterDataXML XML = NULL,  
+ @dividendInformationXML XML = NULL,  
+ @securityCommitmentXML XML = NULL,  
+ @stockExchangesXML XML = NULL,  
+ @counterPartiesXML XML = NULL,  
+ @commissionSubtypesXML XML = NULL,  
+ @commissionTypesSubtypesXML XML = NULL,  
+ @cutOffDatesXML    XML = NULL,  
+ @systemInformationXML  XML = NULL,  
+ @clientMasterXML   XML = NULL,  
+ @corporateActionOptionReferenceXML XML = NULL,  
+ @productTypesXML   XML = NULL,  
+ @commissionTypesDataXML  XML = NULL,  
+ @txnCodeMasterDataXML  XML = NULL,  
+ @cutOffDate     DATETIME = NULL,  
+ @entityConfigXML   XML = NULL,  
+ @exchangeRateConfigIds VARCHAR(MAX)  = NULL,  
+ @updateInsertMarginNumbersApplicable INT,  
+ @donotDeleteData  INT = 0,       
+ @inflationModuleStartDate DATE   
+)  
+AS  
+BEGIN  
+ SET NOCOUNT ON  
+   
+ DECLARE @id    INT  = 1,  
+  @maxID    INT,  
+  @stepNo    INT,  
+  @configID   INT,  
+  @sql    NVARCHAR(MAX),  
+  @numTrans   INT,  
+  @numPos    INT,  
+  @numCash   INT,  
+  @numBal    INT,  
+  @numCOD    INT,  
+  @numPndTrans   INT,  
+  @numPndPos   INT,  
+  @numPndCash   INT,  
+  @numPndBal   INT,  
+  @numPndCOD   INT,  
+  @maxIDTrans   INT,  
+  @maxIDPndTrans   INT,  
+  @maxIDPndCash   INT,  
+  @maxIDPndBal   INT,  
+  @maxIDPos   INT,  
+  @maxIDPndPos   INT,  
+  @maxIDCash   INT,  
+  @maxIDBal   INT,  
+  @maxIDCOD   INT,  
+  @maxIDPndCOD   INT,   
+  @retStatus   INT,  
+  @versionDate   DATETIME = GETDATE(),  
+  @handledError   TINYINT,  
+  @newContext   VARBINARY(128),  
+  @oldContextInfo   VARBINARY(128)  = CONVERT(VARBINARY(128), ''),  
+  @accIDs    VARCHAR(2000) = '',  
+  @pendingLogXML   XML,  
+  @prodIDsXML   XML  = NULL,  
+  @tradeDetailDataTobeSaved  UiTradeDetailObject,  
+  @updatedPositionData   OpenDetailDataType,  
+  @setPriceUpdate  OpenDetailDataType,  
+  @cashDetailData CashDetailData,  
+  @updatedCashData UpdatedCashData,  
+  @PendingPnsBalanceDetailXML XML,  
+  @insUiExchangeRatesObject UiExchangeRatesObject,  
+  @delUiExchangeRatesObject UiExchangeRatesObject,  
+  @versionSource  VARCHAR(60) = 'NAVFILESETUP:Api',  
+  @hdoc int  
+   
+    
+ DECLARE @PendingDate TABLE  
+ (  
+  Source  VARCHAR(2),  
+  ReportDate DATE,  
+  ClientID INTEGER,  
+  BrokerID INTEGER,  
+  PackageID INTEGER  
+  
+ )  
+   
+ DECLARE @LastWorkingDateOfMonth TABLE (  
+  LastWorkingDateOfMonthValue DATE  
+ );  
+  
+ CREATE TABLE #balanceDetailData  
+ (  
+  Action   CHAR(1),  
+  BalanceID  INTEGER,  
+  Source   CHAR(2),  
+  Status   CHAR(1),  
+  ReportDate  DATE,  
+  ClientID  INTEGER,  
+  BrokerID  INTEGER,  
+  AccountID  INTEGER,  
+  CurrID   INTEGER,  
+  EndingBalance  FLOAT,  
+  Strategy   VARCHAR(30)  
+ )  
+  
+ CREATE TABLE #tempFileSetupBalance (  
+   [BalanceID] [int] NOT NULL,  
+   [Source] [varchar](2) NULL,  
+   [ClientID] [int] NULL,  
+   [BrokerID] [int] NULL,  
+   [ReportDate] [datetime] NULL,  
+   [AccountID] [int] NULL,  
+   [AccountNo] [varchar](60) NULL,  
+   [CurrencyID] [int] NULL,  
+   [Currency] [varchar](100) NULL,  
+   [RegIndicator] [varchar](30) NULL,  
+   [OpenBalance] [float] NULL,  
+   [EndBalance] [float] NULL,  
+   [EquityAdjustment] [float] NULL,  
+   [TotalOTE] [float] NULL,  
+   [BeginEquity] [float] NULL,  
+   [TotalEquity] [float] NULL,  
+   [AccruedInterest] [float] NULL,  
+   [AccruedInterestPayable] [float] NULL,  
+   [AccruedBondInterest] [float] NULL,  
+   [AccruedDividend] [float] NULL,  
+   [AccruedCommission] [float] NULL,  
+   [DayExchangeRate] [float] NULL,  
+   [InitialMargin] [float] NULL,  
+   [MaintenanceMargin] [float] NULL,  
+   [Comment] [varchar](255) NULL,  
+   [PackageID] [int] NULL,  
+   [PackageConfigDetailIDs] [varchar](max) NULL,  
+   [ConfigID] [int] NULL,  
+   [IsPending] [tinyint] NULL,  
+   [B23StakingIncome] [float] NULL,  
+   [B24RewardIncome] [float] NULL,  
+   [B25OtherIncome] [float] NULL,  
+   [Strategy] [varchar](30) NULL,  
+   [RecordDateTime] [varchar](50) NULL  
+ )  
+  
+ CREATE TABLE #tempFileSetupTradesDetailData (  
+  [TradeID] [int] NULL,  
+  [RowID] [int],  
+  [Source] [varchar](2) NULL,  
+  [Status] [varchar](2) NULL,  
+  [ClientID] [int] NULL,  
+  [BaseCurrency] [int] NULL,  
+  [IsOptionProduct] [int] NULL,  
+  [IsAssignmentTrade] [int] NULL,  
+  [BrokerID] [int] NULL,  
+  [ReportDate] [datetime] NULL,  
+  [TradeDate] [datetime] NULL,  
+  [SettlementDate] [datetime] NULL,  
+  [AccountID] [int] NULL,  
+  [AccountNo] [varchar](60) NULL,  
+  [CurrencyID] [int] NULL,  
+  [Currency] [varchar](100) NULL,  
+  [RegIndicator] [varchar](30) NULL,  
+  [ProductGroupID] [int] NULL,  
+  [ProductID] [int] NULL,  
+  [ProductDesc] [varchar](60) NULL,  
+  [AssetClass] [varchar](30) NULL,  
+  [ProductType] [varchar](60) NULL,  
+  [Cusip] [varchar](20) NULL,  
+  [Symbol] [varchar](30) NULL,  
+  [ISIN] [varchar](20) NULL,  
+  [StrikePrice] [float] NULL,  
+  [InterestRate] [float] NULL,  
+  [MaturityDate] [datetime] NULL,  
+  [Multiplier] [float] NULL,  
+  [Ticker] [varchar](30) NULL,  
+  [Sedol] [varchar](30) NULL,  
+  [Sector] [varchar](60) NULL,  
+  [SubSector] [varchar](60) NULL,  
+  [Factor] [float] NULL,  
+  [Strategy] [varchar](60) NULL,  
+  [Quantity] [float] NULL,  
+  [TransactionCode] [varchar](12) NULL,  
+  [Amount] [float] NULL,  
+  [PrincipleAmount] [float] NULL,  
+  [CostAmount] [float] NULL,  
+  [InterestAmount] [float] NULL,  
+  [InterestReceived] [float] NULL,  
+  [Dividend] [float] NULL,  
+  [TaxWithheld] [float] NULL,  
+  [RealizedGain] [float] NULL,  
+  [Price] [float] NULL,  
+  [Commission] [float] NULL,  
+  [ExchangeFee] [float] NULL,  
+  [NfaFee] [float] NULL,  
+  [HandleFee] [float] NULL,  
+  [GiveupFee] [float] NULL,  
+  [EfpFee] [float] NULL,  
+  [Field01] [varchar](30) NULL,  
+  [Field02] [varchar](30) NULL,  
+  [Field03] [varchar](30) NULL,  
+  [Field04] [varchar](30) NULL,  
+  [Field05] [varchar](30) NULL,  
+  [Field07] [varchar](30) NULL,  
+  [Field08] [varchar](30) NULL,  
+  [Field09] [varchar](30) NULL,  
+  [CancelIndiactor] [varchar](30) NULL,  
+  [ExecutingBroker] [varchar](60) NULL,  
+  [ClearingBroker] [varchar](60) NULL,  
+  [UnderlyingSymbol] [varchar](20) NULL,  
+  [RICSymbol] [varchar](100) NULL,  
+  [RICExchangeCode] [varchar](200) NULL,  
+  [UnderlyingRICSymbol] [varchar](100) NULL,  
+  [ExchangeID] [int] NULL,  
+  [Exchange] [varchar](60) NULL,  
+  [ExchangeRate] [float] NULL,  
+  [DayExchangeRate] [float] NULL,  
+  [CounterCurrID] [int] NULL,  
+  [CounterCurrency] [varchar](100) NULL,  
+  [ProdCountryDesc] [varchar](60) NULL,  
+  [CallPut] [varchar](6) NULL,  
+  [PackageID] [int] NULL,  
+  [PackageConfigDetailIDs] [varchar](max) NULL,  
+  [ConfigID] [int] NULL,  
+  [IsPending] [tinyint] NULL,  
+  [IsCashData] [tinyint] NULL,  
+  [FileProductName] [varchar](255) NULL,  
+  [FileRecLegPaymentType] [varchar](100) NULL,  
+  [FilePayLegPaymentType] [varchar](100) NULL,  
+  [FileRecLegCouponFrequency] [varchar](100) NULL,  
+  [FilePayLegCouponFrequency] [varchar](100) NULL,  
+  [FIGISymbol] [varchar](20) NULL,  
+  [OrderNumber] [varchar](250) NULL,  
+  [AllocationCode] [varchar](250) NULL,  
+  [RiskStrategy] [varchar](250) NULL,  
+  [DCPTheme] [varchar](250) NULL,  
+  [PnlStrategy] [varchar](250) NULL,  
+  [TradeIndicator] [varchar](250) NULL,  
+  [ClientAssetClass] [varchar](250) NULL,  
+  [ReasonCode] [varchar](1000) NULL,  
+  [DocumentationType] [varchar](20) NULL,  
+  [RecordDateTime] [varchar](50) NULL  
+ )  
+  
+ CREATE TABLE #tempFileSetupCash (  
+   [CashID] [int] NOT NULL,  
+   [Source] [varchar](2) NULL,  
+   [ClientID] [int] NULL,  
+   [BrokerID] [int] NULL,  
+   [ReportDate] [datetime] NULL,  
+   [AccountID] [int] NULL,  
+   [AccountNo] [varchar](60) NULL,  
+   [CurrencyID] [int] NULL,  
+   [Currency] [varchar](100) NULL,  
+   [RegIndicator] [varchar](30) NULL,  
+   [DenoCurrencyID] [int] NULL,  
+   [DenoCurrency] [varchar](100) NULL,  
+   [CashCodeID] [varchar](10) NULL,  
+   [CashCodeDesc] [varchar](60) NULL,  
+   [CashDesc] [varchar](60) NULL,  
+   [Amount] [float] NULL,  
+   [CashTypeCode] [varchar](10) NULL,  
+   [CashType] [varchar](15) NULL,  
+   [ProductGroupID] [int] NULL,  
+   [ProductID] [int] NULL,  
+   [ProductDesc] [varchar](60) NULL,  
+   [AssetClass] [varchar](30) NULL,  
+   [ProductType] [varchar](60) NULL,  
+   [Cusip] [varchar](20) NULL,  
+   [Symbol] [varchar](30) NULL,  
+   [ISIN] [varchar](20) NULL,  
+   [StrikePrice] [float] NULL,  
+   [InterestRate] [float] NULL,  
+   [MaturityDate] [datetime] NULL,  
+   [Ticker] [varchar](30) NULL,  
+   [Sedol] [varchar](30) NULL,  
+   [ExchangeID] [int] NULL,  
+   [Exchange] [varchar](60) NULL,  
+   [Comment] [varchar](255) NULL,  
+   [PackageID] [int] NULL,  
+   [PackageConfigDetailIDs] [varchar](max) NULL,  
+   [ConfigID] [int] NULL,  
+   [IsPending] [tinyint] NULL,  
+   [RICsymbol] [varchar](100) NULL,  
+   [FIGISymbol] [varchar](20) NULL,  
+   [TradeNumber] [varchar](200) NULL,  
+   [TradeDate] [date] NULL,  
+   [ExchangeRate] [float] NULL,  
+   [Strategy] [varchar](30) NULL,  
+   [RecordDateTime] [varchar](50) NULL,  
+   [DoCopyCash] [varchar](1) NULL,  
+   [VersionSource] [varchar](50) NULL,  
+   NAVQueryID   varchar(max) null  
+ )  
+  
+ CREATE TABLE #exchangeRates        
+ (        
+    ExchangeRateID  INTEGER,     
+    ReportDate  DATETIME,        
+    BrokerID  INTEGER,        
+    CurrencyID  INTEGER,        
+    ClientExchangeRate FLOAT,        
+    MasterExchangeRate FLOAT,        
+    Source   CHAR(1),        
+    Action   CHAR(1)        
+ )  
+   
+  
+ CREATE TABLE #manuallyUpdatedPrices        
+ (        
+    ProductID   INTEGER,     
+    ReportDate  DATETIME,        
+    CurrencyID  INTEGER,        
+    ClientID    INTEGER,        
+    AccountId   INTEGER,        
+    SetPrice    FLOAT,  
+    Source    VARCHAR(50),  
+    VersionDate DATETIME,  
+    VersionSource VARCHAR(MAX)    
+ )  
+  
+ SET @oldContextInfo = CONVERT(VARBINARY(128), '')  
+ SET CONTEXT_INFO @oldContextInfo  
+  
+ CREATE TABLE #tradeSourceDataToDelete  
+ (  
+  Source  VARCHAR(2)  
+ )  
+  
+ -- Table contained configured accounts for clients in post transformation  
+ CREATE TABLE #configuredAccounts  
+ (  
+  Client    INTEGER,  
+  AccID    INTEGER,  
+  Config    INTEGER,  
+  DataCopyFor   TINYINT  
+  
+ )  
+  
+ DECLARE @exchangeRateConfigID TABLE  
+ (  
+  ConfigID INTEGER  
+ )  
+  
+   
+   CREATE TABLE #InflationEnabledSource  
+ ( 
+ Source VARCHAR(10),  
+ ValidFrom DATE,  
+ ValidTo DATE  
+ )  
+   
+   
+ CREATE TABLE #indexRatio  
+ (    
+  ProdID  INTEGER,  
+  IndexRatio FLOAT(53)          
+ )  
+  
+ CREATE TABLE #tempFileSetupPosition (  
+      [OpenID] [int],  
+      [Source] [varchar](2) NULL,  
+      [ClientID] [int] NULL,  
+      [BrokerID] [int] NULL,  
+      [ReportDate] [datetime] NULL,  
+      [TradeDate] [datetime] NULL,  
+      [AccountID] [int] NULL,  
+      [AccountNo] [varchar](60) NULL,  
+      [CurrencyID] [int] NULL,  
+      [Currency] [varchar](100) NULL,  
+      [RegIndicator] [varchar](30) NULL,  
+      [ProductGroupID] [int] NULL,  
+      [ProductID] [int] NULL,  
+      [ProductDesc] [varchar](60) NULL,  
+      [AssetClass] [varchar](30) NULL,  
+      [ProductType] [varchar](60) NULL,  
+      [Cusip] [varchar](20) NULL,  
+      [Symbol] [varchar](30) NULL,  
+      [ISIN] [varchar](20) NULL,  
+      [StrikePrice] [float] NULL,  
+      [InterestRate] [float] NULL,  
+      [MaturityDate] [date] NULL,  
+      [Multiplier] [float] NULL,  
+      [Ticker] [varchar](30) NULL,  
+      [Sedol] [varchar](30) NULL,  
+      [Sector] [varchar](60) NULL,  
+      [SubSector] [varchar](60) NULL,  
+      [Quantity] [float] NULL,  
+      [SetPrice] [float] NULL,  
+      [MarketValue] [float] NULL,  
+      [AccruedInterest] [float] NULL,  
+      [AccruedDividend] [float] NULL,  
+      [AccruedTax] [float] NULL,  
+      [UnrealGain] [float] NULL,  
+      [Leverage] [float] NULL,  
+      [RebateAmount] [float] NULL,  
+      [RebateRate] [float] NULL,  
+      [ExerciseDate] [datetime] NULL,  
+      [PayDate] [datetime] NULL,  
+      [Field01] [varchar](30) NULL,  
+      [Field02] [varchar](30) NULL,  
+      [Field03] [varchar](30) NULL,  
+      [Field04] [varchar](30) NULL,  
+      [Field05] [varchar](30) NULL,  
+      [UnderlyingSymbol] [varchar](20) NULL,  
+      [RICSymbol] [varchar](100) NULL,  
+      [RICExchangeCode] [varchar](200) NULL,  
+      [UnderlyingRICSymbol] [varchar](100) NULL,  
+      [ExchangeID] [int] NULL,  
+      [Exchange] [varchar](60) NULL,  
+      [DayExchangeRate] [float] NULL,  
+      [CounterCurrID] [int] NULL,  
+      [CounterCurrency] [varchar](100) NULL,  
+      [ProdCountryDesc] [varchar](60) NULL,  
+      [CallPut] [varchar](6) NULL,  
+      [Price] [float] NULL,  
+      [CostAmount] [float] NULL,  
+      [TransactionCode] [varchar](10) NULL,  
+      [Strategy] [varchar](60) NULL,  
+      [AccrualProcessStatus] [tinyint] NULL,  
+      [PackageID] [int] NULL,  
+      [PackageConfigDetailIDs] [varchar](max) NULL,  
+      [ConfigID] [int] NULL,  
+      [IsPending] [tinyint] NULL,  
+      [FileProductName] [varchar](255) NULL,  
+      [FileRecLegPaymentType] [varchar](100) NULL,  
+      [FilePayLegPaymentType] [varchar](100) NULL,  
+      [FileRecLegCouponFrequency] [varchar](100) NULL,  
+      [FilePayLegCouponFrequency] [varchar](100) NULL,  
+      [BrokerExchangeRate] [float] NULL,  
+      [FIGISymbol] [varchar](20) NULL,  
+      [FetchedSetPrice] [float] NULL  
+     )  
+  
+  CREATE TABLE #loanCycleCashMappingCashIds
+	(
+		CashID	INT
+	)
+   
+ BEGIN TRY  
+    
+  BEGIN TRAN   
+    EXEC sp_xml_preparedocument @hdoc OUTPUT,@indexRatioXML  
+  INSERT #indexRatio(ProdID,IndexRatio)  
+  SELECT ProdID    = ProdId,  
+    IndexRatio   = CASE WHEN ISNULL(IndexRatio,0) = 0  THEN NULL ELSE IndexRatio END  
+  FROM OPENXML(@hdoc,'/ArrayOfMasterIndexRatio /MasterIndexRatio',2)  
+  WITH  
+  (  
+   ProdId   INTEGER,  
+   IndexRatio FLOAT(53)    
+  )  
+  EXEC sp_xml_removedocument @hdoc  
+  --Commit Data into parmanent Tables  
+  IF @isCalledFrom > 0  
+  BEGIN  
+  
+   -- Margin number updation in balance detail table for which data exist in system.  
+   IF(@updateInsertMarginNumbersApplicable = 1)  
+   BEGIN  
+    SET @oldContextInfo = CONTEXT_INFO()  
+  
+    IF(@oldContextInfo IS NULL)  
+     SET @oldContextInfo = CONVERT(VARBINARY(128), '')  
+       
+    SET @newContext = CAST('UpdateMarginFigures' + SPACE(128) AS VARBINARY(128) )  
+  
+    SET CONTEXT_INFO @newContext  
+  
+    UPDATE A  
+    SET Initial_margin  = B.InitialMargin,  
+     maintenance_margin = B.MaintenanceMargin,  
+     version_date  = @versionDate,  
+     version_source  = @versionSource  
+    FROM Balance_Detail  A  
+    INNER JOIN  
+    (  
+     SELECT B.ReportDate,B.ClientID,B.BrokerID,B.Source,B.AccountID,B.CurrencyID,InitialMargin = SUM(B.InitialMargin),MaintenanceMargin = SUM(B.MaintenanceMargin)  
+     FROM FileSetupBalance B WITH(NOLOCK)  
+     WHERE B.IsPending = 0  
+     GROUP BY B.ReportDate,B.ClientID,B.BrokerID,B.Source,B.AccountID,B.CurrencyID  
+    )B  
+    ON A.report_date  = B.ReportDate  
+    AND A.client_id  = B.ClientID  
+    AND A.broker_id  = B.BrokerID  
+    AND A.source  = B.Source  
+    AND A.acc_id  = B.AccountID  
+    AND A.curr_id  = B.CurrencyID  
+  
+    SET CONTEXT_INFO @oldContextInfo  
+  
+    DELETE B  
+    FROM Balance_Detail  A WITH(NOLOCK)  
+    INNER JOIN  
+     FileSetupBalance B   
+    ON A.report_date  = B.ReportDate  
+    AND A.client_id  = B.ClientID  
+    AND A.broker_id  = B.BrokerID  
+    AND A.source  = B.Source  
+    AND A.acc_id  = B.AccountID  
+    AND A.curr_id  = B.CurrencyID  
+    WHERE IsPending = 0  
+   END  
+   --------------------------------------------------------------------------------------------------------------------  
+   --Insert data into pending and permanent tables  
+   --------------------------------------------------------------------------------------------------------------------  
+   SELECT @numTrans = COUNT(*) FROM FileSetupTrades WHERE IsPending = 0  
+   SELECT @numPndTrans = COUNT(*) FROM FileSetupTrades WHERE IsPending = 1  
+   SELECT @numPos  = COUNT(*) FROM FileSetupPosition WHERE IsPending = 0  
+   SELECT @numPndPos = COUNT(*) FROM FileSetupPosition WHERE IsPending = 1  
+   SELECT @numCash = COUNT(*) FROM FileSetupCash WHERE IsPending = 0  
+   SELECT @numPndCash = COUNT(*) FROM FileSetupCash WHERE IsPending = 1  
+   SELECT @numBal  = COUNT(*) FROM FileSetupBalance WHERE IsPending = 0  
+   SELECT @numPndBal = COUNT(*) FROM FileSetupBalance WHERE IsPending = 1  
+   SELECT @numCOD  = COUNT(*) FROM FileSetupClientOpenDetail WHERE IsPending = 0  
+   SELECT @numPndCOD = COUNT(*) FROM FileSetupClientOpenDetail WHERE IsPending = 1  
+  
+   IF @numTrans > 0  
+   BEGIN  
+    --Fetch New id for trade_detail  
+    EXECUTE @retStatus = UiFetch_Id  'trade_detail', @numTrans, 'SavePostTransformationsProcessesdData', @maxIDTrans OUTPUT  
+  
+    IF (@retStatus != 0) RAISERROR('error in fetch_id for trade_detail',16,1)  
+  
+   END  
+  
+   IF @numPndTrans > 0  
+   BEGIN  
+    --Fetch New id for pending_trade  
+    EXECUTE @retStatus = UiFetch_Id  'pending_trade', @numPndTrans, 'SavePostTransformationsProcessesdData', @maxIDPndTrans OUTPUT  
+  
+    IF (@retStatus != 0) RAISERROR('error in fetch_id for pending_trade',16,1)  
+   END  
+  
+   IF @numPos > 0  
+   BEGIN  
+    --Fetch New id for open_detail  
+    EXECUTE @retStatus = UiFetch_Id  'open_detail', @numPos, 'SavePostTransformationsProcessesdData', @maxIDPos OUTPUT  
+  
+    IF (@retStatus != 0) RAISERROR('error in fetch_id for open_detail',16,1)  
+   END  
+  
+   IF @numPndPos > 0  
+   BEGIN  
+    --Fetch New id for pending_open  
+    EXECUTE @retStatus = UiFetch_Id  'pending_open', @numPndPos, 'SavePostTransformationsProcessesdData', @maxIDPndPos OUTPUT  
+  
+    IF (@retStatus != 0) RAISERROR('error in fetch_id for pending_open',16,1)  
+   END  
+  
+   IF @numCash > 0  
+   BEGIN  
+    --Fetch New id for cash_detail  
+    EXECUTE @retStatus = UiFetch_Id  'cash_detail', @numCash, 'SavePostTransformationsProcessesdData', @maxIDCash OUTPUT  
+  
+    IF (@retStatus != 0) RAISERROR('error in fetch_id for cash_detail',16,1)  
+   END  
+  
+  
+   IF @numPndCash > 0  
+   BEGIN  
+    --Fetch New id for pending_trade  
+    EXECUTE @retStatus = UiFetch_Id  'PendingCash', @numPndCash, 'SavePostTransformationsProcessesdData', @maxIDPndCash  OUTPUT  
+  
+    IF (@retStatus != 0) RAISERROR('error in fetch_id for pending_trade',16,1)  
+   END  
+  
+   IF @numBal > 0  
+   BEGIN  
+    --Fetch New id for balance_detail  
+    EXECUTE @retStatus = UiFetch_Id  'balance_detail', @numBal, 'SavePostTransformationsProcessesdData', @maxIDBal OUTPUT  
+  
+    IF (@retStatus != 0) RAISERROR('error in fetch_id for balance_detail',16,1)  
+   END  
+  
+   IF @numPndBal > 0  
+   BEGIN  
+    --Fetch New id for balance_detail  
+    EXECUTE @retStatus = UiFetch_Id  'PendingBalance', @numPndBal, 'SavePostTransformationsProcessesdData', @maxIDPndBal OUTPUT  
+  
+    IF (@retStatus != 0) RAISERROR('error in fetch_id for balance_detail',16,1)  
+   END  
+     
+     
+   IF @numPndCOD > 0  
+   BEGIN  
+    --Fetch New id for pending_Client_open_detail  
+    EXECUTE @retStatus = UiFetch_Id  'pending_client_open_detail', @numPndCOD, 'SavePostTransformationsProcessesdData', @maxIDPndCOD  OUTPUT  
+  
+    IF (@retStatus != 0) RAISERROR('error in fetch_id for pending_client_open_detail',16,1)  
+   END  
+    
+   --Deleteing Existing data from Pending tables and permanent tables  
+   IF (@isCalledFrom = 1 AND @readPartialData = 0)  
+   BEGIN  
+  
+    DELETE PT  
+    FROM pending_trade  PT  
+    WHERE PT.report_date = @reportDate  
+    AND PT.client_id = @clientID  
+    AND PT.broker_id = @brokerID  
+    AND PT.source = @source  
+    AND PT.PackageID = @packageID  
+  
+    DELETE PO  
+    FROM pending_open  PO  
+    WHERE PO.report_date = @reportDate  
+    AND PO.client_id = @clientID  
+    AND PO.broker_id = @brokerID  
+    AND PO.source = @source  
+    AND PO.PackageID = @packageID  
+  
+    DELETE PCOD  
+    FROM pending_client_open_detail PCOD  
+    WHERE PCOD.report_date= @reportDate  
+    AND PCOD.client_id = @clientID  
+    AND PCOD.broker_id = @brokerID       
+    AND PCOD.source = @source  
+    AND PCOD.PackageID = @packageID  
+  
+    DELETE PC  
+    FROM PendingCash PC  
+    WHERE PC.ReportDate = @reportDate  
+    AND PC.ClientID = @clientID  
+    AND PC.BrokerID = @brokerID  
+    AND PC.Source = @source  
+    AND PC.PackageID = @packageID  
+     
+    DELETE PB  
+    FROM PendingBalance PB  
+    WHERE PB.ReportDate = @reportDate  
+    AND PB.ClientID = @clientID  
+    AND PB.BrokerID = @brokerID  
+    AND PB.Source = @source  
+    AND PB.PackageID = @packageID  
+  
+    IF (@donotDeleteData = 0)  
+    BEGIN  
+     IF(@readFromStaging = 0)  
+     BEGIN  
+      ----pns priorities of only those trades removed which are not inserted due to corporate action  
+      DELETE PP   
+      FROM dbo.PNSPriorities PP  
+      INNER JOIN  
+       FileSetupAccounts FSA WITH(NOLOCK)  
+      ON PP.AccountID = FSA.AccountID       
+      WHERE PP.ReportDate = @reportDate   
+      AND EXISTS ( SELECT 1 FROM trade_detail where  trade_id = TradeID1  AND ISNULL(version_source,'') NOT LIKE '%CORPORATE%')  
+      AND  EXISTS ( SELECT 1 FROM trade_detail where  trade_id = TradeID2  AND ISNULL(version_source,'') NOT LIKE '%CORPORATE%')   
+  
+      INSERT #tradeSourceDataToDelete(Source)  
+      SELECT Source  = @source  
+  
+  
+      SET @oldContextInfo = CONTEXT_INFO()  
+  
+      IF(@oldContextInfo IS NULL)  
+       SET @oldContextInfo = CONVERT(VARBINARY(128), '')  
+       
+      SET @newContext = CAST('FileSetupTradeDetailUpdate' + SPACE(128) AS VARBINARY(128) )  
+  
+      SET CONTEXT_INFO @newContext  
+  
+      DELETE TD  
+      FROM trade_detail  TD  
+      INNER JOIN  
+       FileSetupAccounts FSA WITH(NOLOCK)    
+      ON TD.report_date = @reportDate  
+      AND TD.client_id = @clientID  
+      AND TD.broker_id = @brokerID       
+      AND TD.acc_id = FSA.AccountID  
+      AND FSA.ClientID = @clientID  
+      AND ISNULL(TD.version_source,'') NOT LIKE 'READONLY%'  
+   AND ISNULL(TD.version_source,'') NOT LIKE '%CORPORATE%'  
+      WHERE TD.source = @source  
+      AND  @source = 'B'  
+      AND FSA.ConfigID IN(SELECT DISTINCT ConfigID from FileSetupTrades)  
+       
+  
+      DELETE TD  
+      FROM trade_detail  TD  
+      INNER JOIN  
+       FileSetupAccounts FSA WITH(NOLOCK)    
+      ON TD.report_date = @reportDate  
+      AND TD.client_id = @clientID  
+      AND TD.broker_id = @brokerID       
+      AND TD.acc_id = FSA.AccountID  
+      AND FSA.ClientID = @clientID  
+      WHERE ISNULL(TD.version_source,'') NOT LIKE 'READONLY%'  
+      AND ISNULL(TD.version_source,'') NOT LIKE '%CORPORATE%'  
+      AND TD.source IN ( 'C' ,'N')  
+      and @source = 'C'  
+      AND FSA.ConfigID IN(SELECT DISTINCT ConfigID from FileSetupTrades)  
+       
+      SET CONTEXT_INFO @oldContextInfo  
+       
+  
+      INSERT INTO @cashDetailData(Action,CashID,Source,Status,ReportDate,ClientID,BrokerID,AccountID,CurrID,DenoCurrID,CashCodeID,CashCodeDesc,CashDesc,Quantity,ProdID,NAVQueryID)  
+      SELECT 'D',CD.cash_id,CD.Source,'E',CD.report_date,CD.client_id,CD.broker_id,CD.acc_id,CD.curr_id,CD.deno_curr_id,CD.cash_code_id,CD.cash_code_desc,CD.cash_desc,CD.qty,CD.prod_id,CD.NAVQueryID  
+      FROM  cash_detail  CD WITH(NOLOCK)  
+      INNER JOIN  
+       FileSetupAccounts FSA WITH(NOLOCK)    
+      ON CD.report_date = @reportDate  
+      AND CD.client_id = @clientID  
+      AND CD.broker_id = @brokerID       
+      AND CD.source  = @source  
+      AND CD.acc_id  = FSA.AccountID  
+      AND FSA.ClientID = @clientID  
+      AND ISNULL(CD.version_source,'') NOT LIKE 'READONLY%'  
+    
+	--Delete Cash mapping as well of loan cycles if present 
+	INSERT INTO #loanCycleCashMappingCashIds(CashID)
+	SELECT CD.cash_id
+	FROM cash_detail  CD  WITH(NOLOCK)  
+	INNER JOIN  
+	   FileSetupAccounts FSA WITH(NOLOCK)    
+	ON CD.report_date = @reportDate  
+	AND CD.client_id = @clientID  
+	AND CD.broker_id = @brokerID       
+	AND CD.source  = @source  
+	AND CD.acc_id  = FSA.AccountID  
+	AND FSA.ClientID = @clientID  
+	AND ISNULL(CD.version_source,'') NOT LIKE 'READONLY%'  
+	AND FSA.ConfigID IN(SELECT DISTINCT ConfigID from FileSetupCash) 
+
+	DELETE A
+	FROM LoanInterestCash A
+	INNER JOIN
+		#loanCycleCashMappingCashIds B
+	ON A.CashID = B.CashID
+
+    DELETE CD  
+    FROM cash_detail  CD  
+    INNER JOIN
+	  #loanCycleCashMappingCashIds B
+	ON CD.cash_id = B.CashID  
+   END  
+  
+     IF (@updateInsertMarginNumbersApplicable = 0)  
+     BEGIN      
+       IF(@readFromStaging = 1)      
+       BEGIN     
+         
+         INSERT #balanceDetailData(Action,BalanceID,Source,Status,ReportDate,ClientID,BrokerID,AccountID,CurrID,EndingBalance,Strategy)  
+         SELECT 'D',BD.balance_id,BD.source,BD.status,BD.report_date,BD.client_id,BD.broker_id,BD.acc_id,BD.curr_id,BD.end_bal,BD.Strategy  
+         FROM balance_detail  BD  WITH(NOLOCK)    
+         INNER JOIN      
+          FileSetupAccounts FSA  WITH(NOLOCK)    
+         ON BD.report_date IN (SELECT DISTINCT reportdate from FileSetupBalance)     
+         AND BD.acc_id IN  (SELECT DISTINCT AccountID from FileSetupBalance)     
+         AND BD.client_id = @clientID      
+         AND BD.broker_id = @brokerID           
+         AND BD.source = @source      
+         AND BD.source = 'B'      
+         AND BD.acc_id = FSA.AccountID      
+         AND FSA.ClientID = @clientID  
+           
+         DELETE BD      
+         FROM balance_detail  BD      
+         INNER JOIN      
+          FileSetupAccounts FSA  WITH(NOLOCK)    
+         ON BD.report_date IN (SELECT DISTINCT reportdate from FileSetupBalance)     
+         AND BD.acc_id IN  (SELECT DISTINCT AccountID from FileSetupBalance)     
+         AND BD.client_id = @clientID      
+         AND BD.broker_id = @brokerID           
+         AND BD.source = @source      
+         AND BD.source = 'B'      
+         AND BD.acc_id = FSA.AccountID      
+       AND FSA.ClientID = @clientID  
+         AND FSA.ConfigID IN(SELECT DISTINCT ConfigID from FileSetupBalance)  
+      END      
+      ELSE       
+      BEGIN  
+  
+       INSERT #balanceDetailData(Action,BalanceID,Source,Status,ReportDate,ClientID,BrokerID,AccountID,CurrID,EndingBalance,Strategy)  
+       SELECT 'D',BD.balance_id,BD.source,BD.status,BD.report_date,BD.client_id,BD.broker_id,BD.acc_id,BD.curr_id,BD.end_bal,BD.Strategy  
+       FROM balance_detail  BD  
+       INNER JOIN  
+        FileSetupAccounts FSA WITH(NOLOCK)    
+       ON BD.report_date = @reportDate  
+       AND BD.client_id = @clientID  
+       AND BD.broker_id = @brokerID       
+       AND BD.source = @source  
+       AND BD.source = 'B'  
+       AND BD.acc_id = FSA.AccountID  
+       AND FSA.ClientID = @clientID  
+  
+       --IF EXISTS(SELECT TOP 1 1 FROM FileSetupBalance)  
+       --BEGIN  
+       -- DELETE BD  
+       -- FROM balance_detail  BD  
+       -- INNER JOIN  
+       --  FileSetupAccounts FSA WITH(NOLOCK)    
+       -- ON BD.report_date = @reportDate  
+       -- AND BD.client_id = @clientID  
+       -- AND BD.broker_id = @brokerID       
+       -- AND BD.source = @source  
+       -- AND BD.source = 'B'  
+       -- AND BD.acc_id = FSA.AccountID  
+       -- AND FSA.ClientID = @clientID  
+       -- AND FSA.ConfigID IN(SELECT DISTINCT ConfigID from FileSetupBalance)  
+       --END  
+       --ELSE  
+       --BEGIN  
+        DELETE BD  
+        FROM balance_detail  BD  
+        INNER JOIN  
+         FileSetupAccounts FSA WITH(NOLOCK)    
+        ON BD.report_date = @reportDate  
+        AND BD.client_id = @clientID  
+        AND BD.broker_id = @brokerID       
+        AND BD.source = @source  
+        AND BD.source = 'B'  
+        AND BD.acc_id = FSA.AccountID  
+        AND FSA.ClientID = @clientID  
+       --END  
+      END  
+     END      
+  
+     DELETE COD  
+     FROM client_open_detail COD  
+     INNER JOIN  
+      FileSetupAccounts FSA WITH(NOLOCK)    
+     ON COD.report_date = @reportDate  
+     AND COD.client_id = @clientID  
+     AND COD.broker_id = @brokerID       
+     AND COD.source = @source      
+     AND COD.acc_id = FSA.AccountID  
+     AND FSA.ClientID = @clientID  
+     AND COD.PackageID = @packageID  
+     AND COD.ConfigID IN (SELECT DISTINCT ConfigID FROM FileSetupClientOpenDetail)  
+  
+  
+     SET @oldContextInfo = CONTEXT_INFO()  
+     IF(@oldContextInfo IS NULL)  
+      SET @oldContextInfo = CONVERT(VARBINARY(128), '')  
+       
+     SET @newContext = CAST('FileSetupOpenDetailUpdate' + SPACE(128) AS VARBINARY(128) )  
+  
+     SET CONTEXT_INFO @newContext  
+  
+     INSERT @setPriceUpdate(OpenID,Source,ClientID,AccountID,ReportDate,ProdID,CurrID,SetPrice,Action,Quantity,Amount,BrokerID,VersionDate,VersionSource)  
+     SELECT open_id   = A.open_id,  
+      source   = A.Source,  
+      client_id  = A.Client_ID,  
+      acc_id   = A.acc_id,  
+      report_date  = A.report_date,  
+      prod_id   = A.prod_id,  
+      curr_id   = A.curr_id,  
+      set_price  = A.set_price,  
+      Action         =   'D',  
+      quantity  = A.quantity,  
+      amount   = A.amount,  
+      broker_id  = A.broker_id,  
+      version_date  = @versionDate,  
+      version_source  = LEFT(@versionSource + ':' + HOST_NAME(),30)  
+     FROM open_detail  A  
+     INNER JOIN  
+      FileSetupAccounts FSA WITH(NOLOCK)    
+     ON A.report_date = @reportDate  
+     AND A.client_id = @clientID  
+     AND A.broker_id = @brokerID       
+     AND A.source  = @source  
+     AND A.acc_id  = FSA.AccountID  
+     AND FSA.ClientID = @clientID  
+     AND ISNULL(A.version_source,'') NOT LIKE 'READONLY%'  
+     AND FSA.ConfigID = @configId  
+
+	 IF(@readFromStaging = 1)      
+       BEGIN
+		 DELETE OD  
+		 FROM open_detail  OD  
+		 INNER JOIN  
+		  FileSetupAccounts FSA WITH(NOLOCK)    
+		 ON OD.report_date IN (SELECT DISTINCT reportdate from FileSetupPosition)
+		 AND OD.client_id = @clientID  
+		 AND OD.broker_id = @brokerID       
+		 AND OD.source  = @source  
+		 AND OD.acc_id  = FSA.AccountID  
+		 AND FSA.ClientID = @clientID  
+		 AND ISNULL(OD.version_source,'') NOT LIKE 'READONLY%'  
+		 AND FSA.ConfigID IN(SELECT DISTINCT ConfigID from FileSetupPosition)  
+	   END
+	   ELSE
+	   BEGIN
+		 DELETE OD  
+		 FROM open_detail  OD  
+		 INNER JOIN  
+		  FileSetupAccounts FSA WITH(NOLOCK)    
+		 ON OD.report_date = @reportDate  
+		 AND OD.client_id = @clientID  
+		 AND OD.broker_id = @brokerID       
+		 AND OD.source  = @source  
+		 AND OD.acc_id  = FSA.AccountID  
+		 AND FSA.ClientID = @clientID  
+		 AND ISNULL(OD.version_source,'') NOT LIKE 'READONLY%'  
+		 AND FSA.ConfigID IN(SELECT DISTINCT ConfigID from FileSetupPosition) 
+	   END
+       
+     SET CONTEXT_INFO @oldContextInfo  
+  
+    END  
+      
+   END  
+     
+  
+     
+  
+   IF @numTrans > 0  
+   BEGIN     
+    SET @oldContextInfo = CONTEXT_INFO()  
+  
+    IF(@oldContextInfo IS NULL)  
+     SET @oldContextInfo = CONVERT(VARBINARY(128), '')  
+    SET @newContext = CAST('FileSetupTradeDetailUpdate' + SPACE(128) AS VARBINARY(128) )  
+  
+    SET CONTEXT_INFO @newContext  
+  -- select *  from  trade_detail where version_date > '2023-09-13' and  trade_id < 0  
+  -- delete  from  trade_detail where version_date > '2023-09-13' and  trade_id < 0  
+      
+    INSERT #tempFileSetupTradesDetailData(TradeID, source, status,ClientID, BrokerID, ReportDate, TradeDate, AccountID, CurrencyID, ProductID, Strategy, SettlementDate, Quantity, TransactionCode, Amount,  
+        PrincipleAmount, CostAmount, InterestAmount, InterestReceived, Dividend, TaxWithheld, RealizedGain, Price, Commission, ExchangeFee, NfaFee, HandleFee, GiveupFee, EfpFee, Field01,  
+        Field02, Field03, Field04, Field05, Field07, Field08, Field09,Factor,ExecutingBroker,ClearingBroker,  
+        OrderNumber,AllocationCode,RiskStrategy,DCPTheme,PnlStrategy,TradeIndicator,ClientAssetClass,ReasonCode, Documentationtype,ExchangeRate,RecordDateTime)      
+    SELECT TradeID = @maxIDTrans - ROW_NUMBER() OVER (ORDER BY @maxIDTrans), Source,isnull(status,'E'),ClientID,BrokerID,ReportDate,TradeDate,AccountID,CurrencyID,ProductID,  
+    Strategy,SettlementDate,Quantity,TransactionCode,Amount,PrincipleAmount,CostAmount,InterestAmount,InterestReceived,Dividend,TaxWithheld,RealizedGain,Price,  
+    Commission,ExchangeFee,NfaFee,HandleFee,GiveupFee,EfpFee,Field01,Field02,Field03,Field04,Field05,Field07,Field08,Field09,Factor,ExecutingBroker,ClearingBroker,  
+    OrderNumber, AllocationCode, RiskStrategy,DCPTheme,PnlStrategy,TradeIndicator,ClientAssetClass,ReasonCode,Documentationtype,  
+    ExchRate= CASE WHEN ExchangeRate <=0 THEN NULL ELSE ExchangeRate END, RecordDateTime  
+    FROM FileSetupTradesDetailData WITH(NOLOCK)  
+  
+    INSERT trade_detail(trade_id, source, Status, client_id, broker_id, report_date, trade_date, acc_id, curr_id, prod_id, strategy, settlement_date, quantity, txn_code, amount,  
+    principle_amount, cost_amount, interest_amount, interest_received, dividend, tax_withheld, real_pl, price, commission, exch_fee, nfa_fee, handle_fee, giveup_fee, efp_fee, field1,  
+    field2, field3, field4, field5, field7, field8, field9,factor,executing_broker,clearing_broker,version_date, version_source,ROWGUID,   
+    OrderNumber,AllocationCode,RiskStrategy,DCPTheme,PnlStrategy,TradeIndicator,ClientAssetClass,ReasonCode, Documentationtype, RecordDateTime)      
+    SELECT DISTINCT TradeID,  
+     source   = Source,  
+     Status   = Status,  
+     client_id  = ClientID,  
+     broker_id  = BrokerID,  
+     report_date  = ReportDate,  
+     trade_date  = TradeDate,  
+     acc_id   = AccountID,  
+     curr_id   = CurrencyID,  
+     prod_id   = ProductID,  
+     strategy  = Strategy,  
+     settlement_date  = SettlementDate,  
+     quantity  = Quantity,  
+     txn_code  = TransactionCode,  
+     amount   = Amount, 
+     principle_amount = PrincipleAmount,  
+     cost_amount  = CostAmount,  
+     interest_amount  = InterestAmount,  
+     interest_received = InterestReceived,  
+     dividend  = Dividend,  
+     tax_withheld  = TaxWithheld,  
+     real_pl   = RealizedGain,  
+     price   = Price,  
+     commission  = Commission,  
+     exch_fee  = ExchangeFee,  
+     nfa_fee   = NfaFee,  
+     handle_fee  = HandleFee,  
+     giveup_fee  = GiveupFee,  
+     efp_fee   = EfpFee,  
+     field01   = Field01,    
+     field02   = Field02,    
+     field03   = Field03,    
+     field04   = Field04,    
+     field05   = Field05,    
+     field07   = Field07,    
+     field08   = Field08,    
+     field09   = Field09,    
+     factor   = Factor,  
+     executing_broker = ExecutingBroker,  
+     clearing_broker  = ClearingBroker,  
+     version_date  = @versionDate,  
+     version_source  = @versionSource,  
+     ROWGUID   = NEWID(),  
+     OrderNumber   = OrderNumber,     
+     AllocationCode  = AllocationCode,   
+     RiskStrategy  = RiskStrategy,   
+     DCPTheme   = DCPTheme,    
+     PnlStrategy   = PnlStrategy ,   
+     TradeIndicator  = TradeIndicator,   
+     ClientAssetClass = ClientAssetClass,  
+     ReasonCode   = ReasonCode,  
+      Documentationtype = Documentationtype,      
+      RecordDateTime   = RecordDateTime   
+    FROM #tempFileSetupTradesDetailData    
+      
+    INSERT @tradeDetailDataTobeSaved([TradeID],Action, source, Status, clientid, brokerid, reportdate, tradedate, AccountID, CurrID, ProdID, strategy, settlementdate, quantity, txncode, amount,  
+        PrincipleAmount, CostAmount, InterestAmount, InterestReceived, dividend, TaxWithheld, RealPl, price, commission, ExchFee, nfafee, HandleFee, giveupfee, EfpFee, field1,  
+        field2, field3, field4, field5, field7, field8, field9,factor,ExecutingBroker,ClearingBroker,versionDate, versionsource,   
+        OrderNumber,AllocationCode,RiskStrategy,DCPTheme,PnlStrategy,TradeIndicator,ClientAssetClass,ReasonCode, Documentationtype,ExchRate)      
+    SELECT trade_id  = TradeID,  
+     Action   = 'I',  
+     source   = Source,  
+     Status   = Status,  
+     client_id  = ClientID,  
+     broker_id  = BrokerID,  
+     report_date  = ReportDate,  
+     trade_date  = TradeDate,  
+     acc_id   = AccountID,  
+     curr_id   = CurrencyID,  
+     prod_id   = ProductID,  
+     strategy  = Strategy,  
+     settlement_date  = SettlementDate,  
+     quantity  = Quantity,  
+     txn_code  = TransactionCode,  
+     amount   = Amount,  
+     principle_amount = PrincipleAmount,  
+     cost_amount  = CostAmount,  
+     interest_amount  = InterestAmount,  
+     interest_received = InterestReceived,  
+     dividend  = Dividend,  
+     tax_withheld  = TaxWithheld,  
+     real_pl   = RealizedGain,  
+     price   = Price,  
+     commission  = Commission,  
+     exch_fee  = ExchangeFee,  
+     nfa_fee   = NfaFee,  
+     handle_fee  = HandleFee,  
+     giveup_fee  = GiveupFee,  
+     efp_fee   = EfpFee,  
+     field01   = Field01,  
+     field02   = Field02,  
+     field03   = Field03,  
+     field04   = Field04,  
+     field05   = Field05,  
+     field07   = Field07,  
+     field08   = Field08,  
+     field09   = Field09,  
+     factor   = Factor,  
+     executing_broker = ExecutingBroker,  
+     clearing_broker  = ClearingBroker,  
+     version_date  = @versionDate,  
+     version_source  = @versionSource,  
+     OrderNumber   = OrderNumber,     
+     AllocationCode  = AllocationCode,   
+     RiskStrategy  = RiskStrategy,   
+     DCPTheme   = DCPTheme,    
+     PnlStrategy   = PnlStrategy ,   
+     TradeIndicator  = TradeIndicator,   
+     ClientAssetClass = ClientAssetClass,  
+     ReasonCode   = ReasonCode,  
+     Documentationtype = Documentationtype,  
+     ExchRate= CASE WHEN ExchangeRate <=0 THEN NULL ELSE ExchangeRate END   
+    FROM #tempFileSetupTradesDetailData  
+  
+  
+    EXEC  UiTradeDetailData @tradeDetailData = @tradeDetailDataTobeSaved,@mainProdMasterDataXML=@mainProdMasterDataXML,@ProdMasterDataXML=@ProdMasterDataXML,@dividendInformationXML=@dividendInformationXML,
+	@securityCommitmentXML=@securityCommitmentXML,@stockExchangesXML=@stockExchangesXML,@counterPartiesXML=@counterPartiesXML,@commissionSubtypesXML=@commissionSubtypesXML,@commissionTypesSubtypesXML=@commissionTypesSubtypesXML,
+	@cutOffDatesXML=@cutOffDatesXML,@systemInformationXML=@systemInformationXML,@clientMasterXML=@clientMasterXML,@corporateActionOptionReferenceXML=@corporateActionOptionReferenceXML,@productTypesXML=@productTypesXML  
+      
+  
+    SET CONTEXT_INFO @oldContextInfo  
+  
+    --Insert exchange rate into TradesExtension tables  
+    INSERT INTO TradesExtension(TradeID, ExchRate)  
+    SELECT TradeID  = @maxIDTrans - ROW_NUMBER() OVER (ORDER BY RowID),  
+      ExchRate = CASE WHEN ExchangeRate <=0 THEN NULL ELSE ExchangeRate END  
+    FROM FileSetupTradesDetailData WITH(NOLOCK)    
+    WHERE NULLIF(ExchangeRate,0) IS NOT NULL  
+      
+    IF(@readFromStaging = 1)      
+    BEGIN      
+      INSERT LivePendingLog(clientid,reportdate)      
+      SELECT @clientid,min(ReportDate)       
+      FROM FileSetupTradesDetailData  WITH(NOLOCK)       
+     -- WHERE IsPending  = 0      
+    END       
+  
+   END  
+  
+   IF @numPndTrans > 0  
+   BEGIN  
+    --insert data into pendings  
+    INSERT pending_trade(trade_id, source, client_id, broker_id, report_date, trade_date, acc_id, acc_num, curr_id, curr, prod_id, prod_desc, asset_class, prod_type, prod_cusip, prod_symbol,  
+      prod_isinno, strike_pice, interest_rate, maturity_date, ticker, sedol, Underlying_Symbol, RIC_Symbol, RIC_exchange_code, underlying_ric_symbol, strategy, settlement_date, quantity, 
+	  buy_sel, amount, principle_amount, cost_amount, interest_amount, interest_rcvd,      
+      dividend, tax_withheld, realized_gain, price, commission, exch_fee, nfa_fee, handle_fee, giveup_fee, efp_fee, field01, field02, field03, field04, field05, field07, field08, field09, 
+	  ExchangeID, Exchange,call_put,reg_ind,cancel_ind,factor,executing_broker,clearing_broker,multiplier,counter_curr_id,      
+      counter_curr,ProdCountryDesc,PackageID,ConfigID, version_date, version_source, IsCashData,      
+      FileProductName,FileRecLegPaymentType,FilePayLegPaymentType,FileRecLegCouponFrequency,FilePayLegCouponFrequency,FIGISymbol,OrderNumber,AllocationCode,RiskStrategy,DCPTheme,PnlStrategy,
+	  TradeIndicator,ClientAssetClass,ReasonCode,DocumentationType, RecordDateTime)      
+    SELECT trade_id  = @maxIDPndTrans - ROW_NUMBER() OVER (ORDER BY @maxIDPndTrans),  
+     source   = Source,  
+     client_id  = ClientID,  
+     broker_id  = BrokerID,  
+     report_date  = ReportDate,  
+     trade_date  = TradeDate,  
+     acc_id   = AccountID,  
+     acc_num   = AccountNo,  
+     curr_id   = CurrencyID,  
+     curr   = Currency,  
+     prod_id   = ProductID,  
+     prod_desc  = ProductDesc,  
+     asset_class  = AssetClass,  
+     prod_type  = ProductType,  
+     prod_cusip  = Cusip,  
+     prod_symbol  = Symbol,  
+     prod_isinno  = ISIN,  
+     strike_pice  = StrikePrice,  
+     interest_rate  = InterestRate,  
+     maturity_date  = MaturityDate,  
+     ticker   = Ticker,  
+     sedol   = Sedol,  
+     Underlying_Symbol = UnderlyingSymbol,  
+     RIC_Symbol  = RICSymbol,    
+     RIC_exchange_code = RICExchangeCode,    
+     underlying_ric_symbol = UnderlyingRICSymbol,  
+     strategy  = Strategy,  
+     settlement_date  = SettlementDate,  
+     quantity  = Quantity,  
+     buy_sel   = TransactionCode,  
+     amount   = Amount,  
+     principle_amount = PrincipleAmount,  
+     cost_amount  = CostAmount,  
+     interest_amount  = InterestAmount,  
+     interest_rcvd  = InterestReceived,  
+     dividend  = Dividend,  
+     tax_withheld  = TaxWithheld,  
+     realized_gain  = RealizedGain,  
+     price   = Price,  
+  commission  = Commission,  
+     exch_fee  = ExchangeFee,  
+     nfa_fee   = NfaFee,  
+     handle_fee  = HandleFee,  
+     giveup_fee  = GiveupFee,  
+     efp_fee   = EfpFee,  
+     field01   = Field01,  
+     field02   = Field02,  
+     field03   = Field03,  
+     field04   = Field04,  
+     field05   = Field05,  
+     field07   = Field07,  
+     field08   = Field08,  
+     field09   = Field09,  
+     ExchangeID  = ExchangeID,   
+     Exchange  = Exchange,  
+     call_put  = CallPut,  
+     reg_ind   = RegIndicator,  
+     cancel_ind  = CancelIndiactor,  
+     factor   = Factor,  
+     executing_broker = ExecutingBroker,  
+     clearing_broker  = ClearingBroker,  
+     multiplier  = Multiplier,  
+     counter_curr_id  = CounterCurrID,  
+     counter_curr  = CounterCurrency,  
+     ProdCountryDesc  = ProdCountryDesc,  
+     PackageID  = PackageID,  
+     ConfigID  = ConfigID,  
+     version_date  = @versionDate,  
+     version_source  = @versionSource,  
+     IsCashData  = 0,  
+     FileProductName   = FileProductName,  
+     FileRecLegPaymentType  = FileRecLegPaymentType,  
+     FilePayLegPaymentType  = FilePayLegPaymentType,  
+     FileRecLegCouponFrequency = FileRecLegCouponFrequency,  
+     FilePayLegCouponFrequency = FilePayLegCouponFrequency,  
+     FIGISymbol   =  FIGISymbol,  
+     OrderNumber   =  OrderNumber,       
+     AllocationCode  =  AllocationCode,   
+     RiskStrategy  =  RiskStrategy,   
+     DCPTheme   =  DCPTheme,    
+     PnlStrategy   =  PnlStrategy ,   
+     TradeIndicator  =  TradeIndicator,   
+     ClientAssetClass =  ClientAssetClass,  
+     ReasonCode   =  ReasonCode,  
+      DocumentationType =  DocumentationType,      
+      RecordDateTime   =  RecordDateTime      
+    FROM FileSetupTrades WITH(NOLOCK)    
+    WHERE IsPending  = 1  
+  
+    IF(@readFromStaging =1)      
+    BEGIN      
+     INSERT LivePendingLog(clientid,reportdate)      
+     SELECT @clientid,min(ReportDate)       
+     FROM FileSetupTrades    WITH(NOLOCK)     
+     WHERE IsPending  = 1      
+    END       
+   END         
+  
+   IF @numPos > 0  
+   BEGIN   
+    IF @source = 'B'  
+    BEGIN  
+     SET @newContext = CAST('MainAdapterFileSetupBroker' + space(128) AS VARBINARY(128) )  
+     SET CONTEXT_INFO @newContext  
+    END  
+    ELSE  
+    BEGIN  
+     SET @newContext = CAST('MainAdapter' + space(128) AS VARBINARY(128) )  
+     SET CONTEXT_INFO @newContext  
+    END  
+     
+       
+     INSERT INTO #manuallyUpdatedPrices(ProductID,ReportDate,CurrencyID,ClientID,AccountId,SetPrice,Source,VersionDate,VersionSource)  
+     SELECT SP.prod_id, SP.report_date,SP.curr_id,SP.ClientId, SP.AccId, SP.Set_price,SP.Source,SP.version_date,SP.Version_source      
+     FROM  Set_Price  SP WITH(NOLOCK)   
+     WHERE SP.report_date = @reportDate              
+     AND ISNULL(SP.IsManual,0) = 1    
+      
+       
+     UPDATE A   
+     SET   
+     SetPrice       = B.Setprice  
+     FROM  FileSetupPosition A  
+     INNER JOIN   
+     #manuallyUpdatedPrices B  
+     ON  A.ProductID = B.ProductID  
+     AND A.CurrencyID  = B.CurrencyID                    
+     AND A.ClientID = B.ClientId                      
+     AND A.ReportDate  = B.ReportDate   
+     AND A.AccountId  = B.AccountId  
+     WHERE A.Source =  'C'  
+  
+     UPDATE A   
+     SET   
+     SetPrice       = B.Setprice  
+     FROM  FileSetupPosition A  
+     INNER JOIN   
+     #manuallyUpdatedPrices B  
+     ON  A.ProductID = B.ProductID  
+     AND A.CurrencyID  = B.CurrencyID                    
+     AND A.ClientID = B.ClientId                      
+     AND A.ReportDate  = B.ReportDate   
+     WHERE ISNULL(B.AccountId,0) =  0  
+     AND A.Source =  'C'  
+       
+  
+   IF (@reportDate>= @inflationModuleStartDate)  
+   BEGIN  
+    if(@sourceForIFDCalculation = 'BROKER')  
+    BEGIN  
+    INSERT INTO #InflationEnabledSource  
+    SELECT 'BROKER', GETDATE(),GETDATE()  
+    END  
+  
+    INSERT INTO #InflationEnabledSource  
+    SELECT DISTINCT VALUE, a.ValidFrom, a.ValidTo FROM EntityProcessConfiguration A WITH(NOLOCK)   
+    CROSS APPLY STRING_SPLIT(A.OTHERS,',')  where EntityProcessConfigType='INFLATIONINDEXBOND' AND ClientID=@clientID AND VALUE LIKE '%CLIENT%'  
+    AND @reportDate BETWEEN A.ValidFrom AND A.ValidTo  
+   END  
+      
+    IF EXISTS(SELECT TOP 1 1 FROM #InflationEnabledSource WHERE Source IN ('Client', 'Broker'))  
+    BEGIN  
+     UPDATE A   
+     SET   
+     FetchedSetPrice  = CASE WHEN Source='C' THEN SetPrice END,  
+     SetPrice   = CASE WHEN Source='C'THEN   
+           CASE WHEN IndexRatio IS NULL THEN NULL   
+           ELSE IndexRatio*SetPrice END  
+           ELSE SetPrice END  
+     FROM  FileSetupPosition A  
+     INNER JOIN #indexRatio B  
+     ON  A.ProductID=B.ProdID  
+     WHERE IsPending = 0  
+       
+  
+    INSERT #tempFileSetupPosition(OpenID, Source,ClientID,BrokerID,ReportDate,AccountID,CurrencyID,ProductID,Quantity,SetPrice,FetchedSetPrice,Price,MarketValue,AccruedInterest,AccruedDividend,AccruedTax,
+		UnrealGain,Leverage,RebateAmount,RebateRate,ExerciseDate,PayDate,Field01,Field02,Field03,Field04,Field05,CostAmount,TradeDate)  
+    SELECT OpenId   = @maxIDPos - ROW_NUMBER() OVER (ORDER BY @maxIDPos),  
+     Source,ClientID,BrokerID,ReportDate,AccountID,CurrencyID,ProductID,Quantity,SetPrice,FetchedSetPrice,Price,MarketValue,AccruedInterest,AccruedDividend,AccruedTax,
+	 UnrealGain,Leverage,RebateAmount,RebateRate,ExerciseDate,PayDate,Field01,Field02,Field03,Field04,Field05,CostAmount,TradeDate  
+    FROM FileSetupPosition A With (NoLock)  
+    WHERE IsPending = 0  
+  
+  
+     INSERT Positions(open_id, source, status, client_id, broker_id, report_date, acc_id, curr_id, prod_id, quantity, set_price, FetchedSetPrice, price, amount, accrued_interest,  
+    accrued_dividend, accrued_tax_withheld, unreal_pl, leverage, rebate_amount, rebate_rate, exercise_date, pay_date, field1, field2, field3, field4, field5, cost_amount,trade_date,  
+    FileSetPrice,FileAmount,version_date, version_source, ROWGUID)  
+    SELECT open_id   = OpenID,  
+     source   = Source,  
+     Status   = 'E',  
+     client_id  = ClientID,  
+     broker_id  = BrokerID,  
+     report_date  = ReportDate,  
+     acc_id   = AccountID,  
+     curr_id   = CurrencyID,  
+     prod_id   = ProductID,  
+     quantity  = Quantity,  
+     set_price  = SetPrice,  
+     FetchedSetPrice = FetchedSetPrice,  
+     price   = Price,  
+     amount   = MarketValue,  
+     accrued_interest = AccruedInterest,  
+     accrued_dividend = AccruedDividend,  
+     accrued_tax  = AccruedTax,  
+     unreal_pl  = UnrealGain,  
+     leverage  = Leverage,  
+     rebate_amount  = RebateAmount,  
+     rebate_rate  = RebateRate,  
+     exercise_date  = ExerciseDate,  
+     pay_date  = PayDate,  
+     field1   = Field01,  
+     field2   = Field02,  
+     field3   = Field03,  
+     field4   = Field04,  
+     field5   = Field05,  
+     cost_amount  = CostAmount,  
+     trade_date  = TradeDate,  
+     FileSetPrice  = SetPrice,  
+     FileAmount  = MarketValue,  
+     version_date  = @versionDate,  
+     version_source  = @versionSource,  
+     ROWGUID   = NEWID()  
+    FROM #tempFileSetupPosition A  
+  
+    INSERT @setPriceUpdate(OpenID,Source,ClientID,AccountID,ReportDate,ProdID,CurrID,SetPrice,FetchedsetPrice,Action,Quantity,Amount,BrokerID,VersionDate,VersionSource)  
+    SELECT open_id   = OpenID,  
+     source   = Source,  
+     client_id  = ClientID,  
+     acc_id   = AccountID,  
+     report_date  = ReportDate,  
+     prod_id   = ProductID,  
+     curr_id   = CurrencyID,  
+     set_price  = SetPrice,  
+     FetchedSetPrice = FetchedSetPrice,  
+     Action         =   'I',  
+     quantity  = Quantity,  
+     amount   = MarketValue,  
+     broker_id  = BrokerID,  
+     version_date  = @versionDate,  
+     version_source  = LEFT(@versionSource + ':' + HOST_NAME(),30)  
+    FROM #tempFileSetupPosition  
+  
+    SET CONTEXT_INFO @oldContextInfo  
+    EXEC CreatePendingPNSEntryforPosition @setPriceUpdate = @setPriceUpdate,@updatedPositionData = @setPriceUpdate,@cutOffDate = @cutOffDate,  
+              @entityConfigXML = @entityConfigXML,@systemInfoXML = @systemInformationXML,@prodMasterXML = @ProdMasterDataXML,@prodTypesXML = @productTypesXML,  
+              @dividendInfoXML = @dividendInformationXML  
+  
+    END  
+    ELSE  
+    BEGIN  
+  
+    INSERT #tempFileSetupPosition(OpenID, Source,ClientID,BrokerID,ReportDate,AccountID,CurrencyID,ProductID,Quantity,SetPrice,FetchedSetPrice,Price,MarketValue,AccruedInterest,AccruedDividend,AccruedTax,
+		UnrealGain,Leverage,RebateAmount,RebateRate,ExerciseDate,PayDate,Field01,Field02,Field03,Field04,Field05,CostAmount,TradeDate)  
+    SELECT OpenID   = @maxIDPos - ROW_NUMBER() OVER (ORDER BY @maxIDPos),  
+     Source,ClientID,BrokerID,ReportDate,AccountID,CurrencyID,ProductID,Quantity,SetPrice,FetchedSetPrice,Price,MarketValue,AccruedInterest,AccruedDividend,AccruedTax,
+		UnrealGain,Leverage,RebateAmount,RebateRate,ExerciseDate,PayDate,Field01,Field02,Field03,Field04,Field05,CostAmount,TradeDate  
+    FROM FileSetupPosition A WITH(NOLOCK)  
+    WHERE IsPending = 0  
+  
+    INSERT Positions(open_id, source, status, client_id, broker_id, report_date, acc_id, curr_id, prod_id, quantity, set_price, price, amount, accrued_interest,  
+    accrued_dividend, accrued_tax_withheld, unreal_pl, leverage, rebate_amount, rebate_rate, exercise_date, pay_date, field1, field2, field3, field4, field5, cost_amount,trade_date,  
+    FileSetPrice,FileAmount,version_date, version_source, ROWGUID)  
+    SELECT open_id   = OpenID,  
+     source   = Source,  
+     Status   = 'E',  
+     client_id  = ClientID,  
+     broker_id  = BrokerID,  
+     report_date  = ReportDate,  
+     acc_id   = AccountID,  
+     curr_id   = CurrencyID,  
+     prod_id   = ProductID,  
+     quantity  = Quantity,  
+     set_price  = SetPrice,  
+     price   = Price,  
+     amount   = MarketValue,  
+     accrued_interest = AccruedInterest,  
+     accrued_dividend = AccruedDividend,  
+     accrued_tax  = AccruedTax,  
+     unreal_pl  = UnrealGain,  
+     leverage  = Leverage,  
+     rebate_amount  = RebateAmount,  
+     rebate_rate  = RebateRate,  
+     exercise_date  = ExerciseDate,  
+     pay_date  = PayDate,  
+     field1   = Field01,  
+     field2   = Field02,  
+     field3   = Field03,  
+     field4   = Field04,  
+     field5   = Field05,  
+     cost_amount  = CostAmount,  
+     trade_date  = TradeDate,  
+     FileSetPrice  = SetPrice,  
+     FileAmount  = MarketValue,  
+     version_date  = @versionDate,  
+     version_source  = @versionSource,  
+     ROWGUID   = NEWID()  
+    FROM #tempFileSetupPosition   
+  
+    INSERT @setPriceUpdate(OpenID,Source,ClientID,AccountID,ReportDate,ProdID,CurrID,SetPrice,Action,Quantity,Amount,BrokerID,VersionDate,VersionSource)  
+    SELECT open_id   = OpenID,  
+     source   = Source,  
+     client_id  = ClientID,  
+     acc_id   = AccountID,  
+     report_date  = ReportDate,  
+     prod_id   = ProductID,  
+     curr_id   = CurrencyID,  
+     set_price  = SetPrice,  
+     Action         =   'I',  
+     quantity  = Quantity,  
+     amount   = MarketValue,  
+     broker_id  = BrokerID,  
+     version_date  = @versionDate,  
+     version_source  = LEFT(@versionSource + ':' + HOST_NAME(),30)  
+    FROM #tempFileSetupPosition  
+  
+    EXEC CreatePendingPNSEntryforPosition @setPriceUpdate = @setPriceUpdate,@updatedPositionData = @updatedPositionData,@cutOffDate = @cutOffDate,  
+              @entityConfigXML = @entityConfigXML,@systemInfoXML = @systemInformationXML,@prodMasterXML = @mainProdMasterDataXML,@prodTypesXML = @productTypesXML,  
+              @dividendInfoXML = @dividendInformationXML  
+    END  
+    SET CONTEXT_INFO @oldContextInfo      
+  
+         
+     UPDATE A   
+     SET   
+     Source  =  B.Source,  
+     IsManual = 1,  
+     Version_Date = B.VersionDate,  
+     Version_source =  B.VersionSource  
+     FROM  Set_Price A  
+     INNER JOIN   
+     #manuallyUpdatedPrices B  
+     ON  A.Prod_ID = B.ProductID  
+     AND A.curr_id  = B.CurrencyID                    
+        AND A.clientid = B.ClientId                      
+        AND A.report_date  = B.ReportDate   
+     AND A.AccId =  B.AccountID  
+  
+     UPDATE A   
+     SET   
+     Source  =  B.Source,  
+     IsManual = 1,  
+     Version_Date = B.VersionDate,  
+     Version_source =  B.VersionSource  
+     FROM  Set_Price A  
+     INNER JOIN   
+     #manuallyUpdatedPrices B  
+     ON  A.Prod_ID = B.ProductID  
+     AND A.curr_id  = B.CurrencyID                    
+        AND A.clientid = B.ClientId                      
+        AND A.report_date  = B.ReportDate   
+     WHERE ISNULL(B.AccountId,0)  =  0   
+          
+      
+  
+   END  
+  
+   IF @numPndPos > 0  
+   BEGIN  
+    INSERT pending_open(open_id, source, client_id, broker_id, report_date, acc_id, acc_num, curr_id, curr, prod_id, prod_desc, asset_class, prod_type, prod_cusip, prod_symbol, prod_isinno,  
+    strike_pice, interest_rate, maturity_date, ticker, sedol, quantity, set_price, price, amount, accrued_interest, accrued_dividend, accrued_tax, unreal_pl, leverage, rebate_amount, rebate_rate,  
+    exercise_date, pay_date, field01, field02, field03, field04, field05, cost_amount,strategy,call_put,underlying_symbol,RIC_symbol,RIC_exchange_code,exchange,  
+    multiplier,counter_curr_id,counter_curr,underlying_ric_symbol,ExchangeID,ProdCountryDesc, PackageID, ConfigID, version_date, version_source,  
+    FileProductName,FileRecLegPaymentType,FilePayLegPaymentType,FileRecLegCouponFrequency,FilePayLegCouponFrequency,FIGISymbol)  
+    SELECT open_id   = @maxIDPndPos - ROW_NUMBER() OVER (ORDER BY @maxIDPndPos),  
+     source   = Source,  
+     client_id  = ClientID,  
+     broker_id  = BrokerID,  
+     report_date  = ReportDate,  
+     acc_id   = AccountID,  
+     acc_num   = AccountNo,  
+     curr_id   = CurrencyID,  
+     curr   = Currency,  
+     prod_id   = ProductID,  
+     prod_desc  = ProductDesc,  
+     asset_class  = AssetClass,  
+     prod_type  = ProductType,  
+     prod_cusip  = Cusip,  
+     prod_symbol  = Symbol,  
+     prod_isinno  = ISIN,  
+     strike_pice  = StrikePrice,  
+     interest_rate  = InterestRate,  
+     maturity_date  = MaturityDate,  
+     ticker   = Ticker,  
+     sedol   = Sedol,  
+     quantity  = Quantity,  
+     set_price  = SetPrice,  
+     price   = price,  
+     amount   = MarketValue,  
+     accrued_interest = AccruedInterest,  
+     accrued_dividend = AccruedDividend,  
+     accrued_tax  = AccruedTax,  
+     unreal_pl  = UnrealGain,  
+     leverage  = Leverage,  
+     rebate_amount  = RebateAmount,  
+     rebate_rate  = RebateRate,  
+     exercise_date  = ExerciseDate,  
+     pay_date  = PayDate,  
+     field1   = Field01,  
+     field2   = Field02,  
+     field3   = Field03,  
+     field4   = Field04,  
+     field5   = Field05,  
+     cost_amount  = CostAmount,  
+     strategy  = Strategy,  
+     call_put  = CallPut,  
+     underlying_symbol = UnderlyingSymbol,  
+     RIC_symbol  = RICSymbol,  
+     RIC_exchange_code = RICExchangeCode,  
+     exchange  = Exchange,  
+     multiplier  = Multiplier,  
+     counter_curr_id  = CounterCurrID,  
+     counter_curr  = CounterCurrency,  
+     underlying_ric_symbol = UnderlyingRICSymbol,  
+     ExchangeID  = ExchangeID,  
+     ProdCountryDesc  = ProdCountryDesc,  
+     PackageID  = PackageID,  
+     ConfigID  = ConfigID,  
+     version_date  = @versionDate,  
+     version_source  = @versionSource,  
+     FileProductName   = FileProductName,  
+     FileRecLegPaymentType  = FileRecLegPaymentType,  
+     FilePayLegPaymentType  = FilePayLegPaymentType,  
+     FileRecLegCouponFrequency = FileRecLegCouponFrequency,  
+     FilePayLegCouponFrequency = FilePayLegCouponFrequency,  
+     FIGISymbol = FIGISymbol  
+    FROM FileSetupPosition WITH(NOLOCK)    
+    WHERE IsPending = 1  
+   END   
+  
+   IF @numCash > 0  
+   BEGIN  
+  
+      INSERT INTO #tempFileSetupCash(CashID,Source,ReportDate,ClientID,BrokerID,AccountID,CurrencyID,DenoCurrencyID,RegIndicator,CashCodeID,CashCodeDesc,CashDesc,Amount,CashType,Comment,ProductID,CashTypeCode,
+		TradeNumber,TradeDate,ExchangeRate,Strategy,RecordDateTime,versionsource,NAVQueryID)  
+    SELECT @maxIDCash - ROW_NUMBER() OVER (ORDER BY @maxIDCash),Source,ReportDate,ClientID,BrokerID,AccountID,CurrencyID,DenoCurrencyID,RegIndicator,CashCodeID,CashCodeDesc,CashDesc,Amount,CashType,Comment,ProductID,CashTypeCode,
+		TradeNumber,TradeDate, ExchangeRate = CASE WHEN ExchangeRate = 0 THEN NULL ELSE ExchangeRate END,Strategy,RecordDateTime,versionsource,NAVQueryID  
+    FROM FileSetupCash WITH(NOLOCK)  
+    WHERE IsPending = 0  
+  
+    INSERT cash_detail(cash_id,source,status,client_id,broker_id,report_date,acc_id,curr_id,prod_id,deno_curr_id,reg_ind,cash_code_id,  
+     cash_code_desc,cash_desc,qty,cash_type,cash_type_code,comment,version_date,version_source,ROWGUID,TradeNumber,TradeDate,ExchangeRate,Strategy, RecordDateTime, NAVQueryID)      
+    SELECT cash_id   = CashID,  
+     source   = Source,  
+     Status   = 'E',  
+     client_id  = ClientID,  
+     broker_id  = BrokerID,  
+     report_date  = ReportDate,  
+     acc_id   = AccountID,  
+     curr_id   = CurrencyID,  
+     prod_id   = ProductID,  
+     deno_curr_id  = DenoCurrencyID,  
+     reg_ind   = LEFT(RegIndicator, 1),  
+     cash_code_id  = CashCodeID,          
+     cash_code_desc  = CashCodeDesc,  
+     cash_desc  = CashDesc,  
+     qty   = Amount,  
+     cash_type  = LEFT(CashType, 15),  
+     cash_type_code  = LEFT(CashTypeCode, 10),   
+     comment   = Comment,  
+     version_date  = @versionDate,  
+     version_source  = LEFT('Api' + ':' + ISNULL(versionsource,''),30),  
+     ROWGUID   = NEWID(),  
+     TradeNumber  = TradeNumber,  
+     TradeDate  = TradeDate,  
+     ExchangeRate = CASE WHEN ExchangeRate = 0 THEN NULL ELSE ExchangeRate END,  
+     Strategy  = Strategy,      
+     RecordDateTime  = RecordDateTime,  
+     NAVQueryID   =   NAVQueryID  
+    FROM #tempFileSetupCash  
+  
+    INSERT INTO @cashDetailData(Action,CashID,Source,Status,ReportDate,ClientID,BrokerID,AccountID,CurrID,DenoCurrID,RegIndicator,CashCodeID,CashCodeDesc,CashDesc,Quantity,CashType,Comment,ProdID,CashTypeCode,NAVQueryID)  
+    SELECT 'I',CashID, Source,'E',ReportDate,ClientID,BrokerID,AccountID,CurrencyID,DenoCurrencyID,RegIndicator,CashCodeID,CashCodeDesc,CashDesc,Amount,CashType,Comment,ProductID,CashTypeCode,NAVQueryID  
+    FROM #tempFileSetupCash  
+  
+    EXEC CreatePendingPNSEntryforCash @cashDetailData,@updatedCashData,@dividendInformationXML,@clientType  
+  
+    IF(@readFromStaging = 1)      
+     BEGIN      
+      INSERT LivePendingLog(clientid,reportdate)      
+      SELECT @clientid,min(ReportDate)       
+      FROM FileSetupCash   WITH(NOLOCK)    
+      WHERE IsPending  = 0      
+    END       
+   END      
+   IF @numPndCash > 0  
+   BEGIN      
+     
+    INSERT PendingCash (CashID,Source,ClientID,BrokerID,ReportDate,AccountID,AccountNo,CurrencyID,Currency,RegIndicator,  
+        DenoCurrencyID,DenoCurrency,CashCodeID,CashCodeDesc,CashDesc,Amount,CashTypeCode,CashType,ProductGroupID,  
+        ProductID,ProductDesc,AssetClass,ProductType,Cusip,Symbol,ISIN,StrikePrice,InterestRate,MaturityDate,Ticker,  
+      Sedol,ExchangeID,Exchange,Comment,PackageID,PackageConfigDetailIDs,ConfigID,VersionDate,VersionSource,RICsymbol,FIGISymbol,TradeNumber,TradeDate,ExchangeRate,Strategy,RecordDateTime,NAVQueryID)      
+    SELECT CashID   = @maxIDPndCash - ROW_NUMBER() OVER (ORDER BY @maxIDPndCash),   
+     Source,  
+     ClientID,  
+     BrokerID,  
+     ReportDate,  
+     AccountID,  
+     AccountNo,  
+     CurrencyID,  
+     Currency,  
+     RegIndicator,  
+     DenoCurrencyID,  
+     DenoCurrency,  
+     CashCodeID,  
+     CashCodeDesc,  
+     CashDesc,  
+     Amount,  
+     CashTypeCode,  
+     CashType,  
+     ProductGroupID,  
+     ProductID,  
+     ProductDesc,  
+     AssetClass,  
+     ProductType,  
+     Cusip,  
+     Symbol,  
+     ISIN,  
+     StrikePrice,  
+     InterestRate,  
+     MaturityDate,  
+     Ticker,  
+     Sedol,  
+     ExchangeID,  
+     Exchange,  
+     Comment,  
+     PackageID,  
+     PackageConfigDetailIDs,  
+     ConfigID,  
+     VersionDate  = @versionDate,  
+     VersionSource  = LEFT('Api' + ':' + ISNULL(versionsource,''),30),  
+     RICsymbol,  
+     FIGISymbol,  
+     TradeNumber,  
+     TradeDate,  
+     ExchangeRate,  
+      Strategy,      
+      RecordDateTime,  
+      NAVQueryID      
+    FROM FileSetupCash WITH(NOLOCK)    
+    WHERE IsPending  = 1  
+  
+    IF(@readFromStaging = 1)      
+    BEGIN      
+      INSERT LivePendingLog(clientid,reportdate)      
+      SELECT @clientid,min(ReportDate)       
+      FROM FileSetupCash   WITH(NOLOCK)     
+      WHERE IsPending  = 1      
+    END       
+  
+   END  
+  
+   IF @numBal > 0  
+   BEGIN   
+     
+    INSERT #tempFileSetupBalance(BalanceID,Source,ReportDate,ClientID,BrokerID,AccountID,CurrencyID,RegIndicator,OpenBalance,EndBalance,EquityAdjustment,  
+    TotalOTE,  
+    BeginEquity,  
+    TotalEquity,  
+    AccruedInterest,  
+    AccruedInterestPayable,  
+    AccruedBondInterest,  
+    AccruedDividend,  
+    AccruedCommission,  
+    Comment,  
+    InitialMargin,  
+    MaintenanceMargin,  
+    B23StakingIncome,  
+    B24RewardIncome,  
+    B25OtherIncome,  
+    Strategy,  
+    RecordDateTime)  
+    SELECT @maxIDBal - ROW_NUMBER() OVER (ORDER BY @maxIDBal),BD.source,ReportDate,MAX(ClientID),MAX(BrokerID),AccountID,CurrencyID,  
+    MAX(RegIndicator),  
+    SUM(OpenBalance),  
+    SUM(EndBalance),  
+    SUM(EquityAdjustment),  
+    SUM(TotalOTE),  
+    SUM(BeginEquity),  
+    SUM(TotalEquity),  
+    SUM(AccruedInterest),  
+    SUM(AccruedInterestPayable),  
+    SUM(AccruedBondInterest),  
+    SUM(AccruedDividend),  
+    SUM(AccruedCommission),  
+    MAX(Comment),  
+    SUM(InitialMargin),  
+    SUM(MaintenanceMargin),  
+    SUM(B23StakingIncome),  
+    SUM(B24RewardIncome),  
+    SUM(B25OtherIncome),  
+    MAX(Strategy),  
+    MAX(RecordDateTime)  
+    FROM FileSetupBalance  BD WITH(NOLOCK)  
+    WHERE IsPending = 0  
+    GROUP BY ReportDate,AccountID,CurrencyID,Source  
+  
+    INSERT balance_detail(balance_id,source,status,client_id,broker_id,report_date,acc_id,curr_id,reg_ind,open_bal,end_bal,equity_adj,tot_ote,  
+     begin_equity,tot_equity,accrued_interest,AccruedInterestPayable,accrued_bond_interest,accrued_dividend,accrued_commission,comments,Initial_margin,  
+     maintenance_margin,B23StakingIncome,B24RewardIncome,B25OtherIncome,version_date,version_source,Strategy, RecordDateTime)      
+    SELECT balance_id  = BalanceID,  
+     source   = Source,  
+     Status   = 'E',  
+     client_id  = ClientID,  
+     broker_id  = BrokerID,  
+     report_date  = ReportDate,  
+     acc_id   = AccountID,  
+     curr_id   = CurrencyID,  
+     reg_ind   = RegIndicator,  
+     open_bal  = OpenBalance,  
+     end_bal   = EndBalance,  
+     equity_adj  = EquityAdjustment,  
+     tot_ote   = TotalOTE,  
+     begin_equity  = BeginEquity,  
+     tot_equity  = TotalEquity,  
+     accrued_interest = AccruedInterest,  
+     AccruedInterestPayable = AccruedInterestPayable,  
+     accrued_bond_interest = AccruedBondInterest,  
+     accrued_dividend = AccruedDividend,  
+     accrued_commission = AccruedCommission,  
+     comments  = Comment,  
+     Initial_margin  = InitialMargin,  
+     maintenance_margin = MaintenanceMargin,   
+     B23StakingIncome = B23StakingIncome,  
+     B24RewardIncome  = B24RewardIncome,  
+     B25OtherIncome  = B25OtherIncome,  
+     version_date  = @versionDate,  
+     version_source  = @versionSource,  
+      Strategy            =   Strategy,      
+      RecordDateTime   = RecordDateTime      
+    FROM #tempFileSetupBalance  
+  
+    SELECT @PendingPnsBalanceDetailXML= convert(xml,(  
+    SELECT Action   = 'I',  
+     BalanceID  = BalanceID,  
+     Source   = Source,  
+     Status   = 'E',  
+     ReportDate  = MIN(ReportDate),  
+     ClientID  = ClientID,  
+     BrokerID  = BrokerID,  
+     AccountID  = AccountID,  
+     CurrID   = CurrID,  
+     EndingBalance = EndingBalance,  
+     Strategy  = Strategy  
+    FROM #balanceDetailData   
+    GROUP BY Action,BalanceID,ClientID,Source,Status,ClientID,BrokerID,AccountID,CurrID,EndingBalance,Strategy  
+    FOR  XML RAW ('dt'), ROOT('ds')));  
+  
+  
+    EXEC SetPendingPnsBalance @clientID, @clientType, @versionSource, @balanceDetailDataXML = @PendingPnsBalanceDetailXML  
+  
+  
+    IF(@readFromStaging = 1)      
+    BEGIN      
+      INSERT LivePendingLog(clientid,reportdate)      
+      SELECT @clientid,min(ReportDate)       
+      FROM FileSetupBalance WITH(NOLOCK)        
+      WHERE IsPending  = 0      
+    END       
+  
+   END      
+   IF @numPndBal > 0  
+   BEGIN   
+      
+    INSERT PendingBalance(BalanceID,Source,ClientID,BrokerID,ReportDate,AccountID,AccountNo,CurrencyID,Currency,  
+     RegIndicator,OpenBalance,EndBalance,EquityAdjustment,TotalOTE,BeginEquity,TotalEquity,  
+     AccruedInterest,AccruedInterestPayable,AccruedBondInterest,AccruedDividend,AccruedCommission,DayExchangeRate,  
+     Comment,PackageID,PackageConfigDetailIDs,ConfigID,InitialMargin,MaintenanceMargin,  
+     B23StakingIncome,B24RewardIncome,B25OtherIncome,VersionDate,VersionSource,Strategy, RecordDateTime)      
+    SELECT BalanceID  = @maxIDPndBal - ROW_NUMBER() OVER (ORDER BY @maxIDPndBal),  
+     Source,  
+     ClientID  = MAX(ClientID),  
+     BrokerID  = MAX(BrokerID),  
+     ReportDate,  
+     AccountID,  
+     AccountNo,  
+     CurrencyID,  
+     Currency,  
+     RegIndicator  = MAX(RegIndicator),  
+     OpenBalance  = SUM(OpenBalance),  
+     EndBalance  = SUM(EndBalance),  
+     EquityAdjustment = SUM(EquityAdjustment),  
+     TotalOTE  = SUM(TotalOTE),  
+     BeginEquity  = SUM(BeginEquity),  
+     TotalEquity  = SUM(TotalEquity),  
+     AccruedInterest  = SUM(AccruedInterest),  
+     AccruedInterestPayable  = SUM(AccruedInterestPayable),  
+     AccruedBondInterest = SUM(AccruedBondInterest),  
+     AccruedDividend  = SUM(AccruedDividend),  
+     AccruedCommission = SUM(AccruedCommission),  
+     DayExchangeRate  = MAX(DayExchangeRate),  
+     Comment   = MAX(Comment),  
+     PackageID  = MAX(PackageID),  
+     PackageConfigDetailIDs = MAX(PackageConfigDetailIDs),  
+     ConfigID  = MAX(ConfigID),  
+     InitialMargin  = SUM(InitialMargin),  
+     MaintenanceMargin = SUM(MaintenanceMargin),  
+     B23StakingIncome = SUM(B23StakingIncome),  
+     B24RewardIncome  = SUM(B24RewardIncome),  
+     B25OtherIncome  = SUM(B25OtherIncome),  
+     VersionDate  = @versionDate,  
+     VersionSource  = @versionSource,  
+      Strategy            =   MAX(Strategy),      
+      RecordDateTime      = MAX(RecordDateTime)      
+    FROM FileSetupBalance WITH(NOLOCK)    
+    WHERE IsPending = 1  
+    GROUP BY ReportDate,AccountID,AccountNo,CurrencyID,Currency,Source  
+  
+    IF(@readFromStaging = 1)      
+    BEGIN      
+      INSERT LivePendingLog(clientid,reportdate)      
+      SELECT @clientid,min(ReportDate)       
+      FROM FileSetupBalance    WITH(NOLOCK)    
+      WHERE IsPending  = 1      
+    END       
+      
+   END      
+   IF @numCOD > 0  
+   BEGIN  
+    INSERT client_open_detail(report_date,source,client_id,broker_id,acc_id,acc_name,curr_id,curr_name,prod_id,prod_desc,interest_rate,maturity_date,prod_symbol,  
+    prod_cusip,prod_isinno,prod_type,ticker,sedol,strategy,hedge_group,sector,l_s,country,company_name,quantity,set_price,amount,converted_ratio,Leverage,  
+    fx_rate,credit_rating,asset_class,liquidity,yc_exposure,dtd_pnl,mtd_pnl,qtd_pnl,ytd_pnl,stat_pnl,trading_pnl,aggregate_pnl,commission,fee,pending_qty,  
+    pending_amount,cost_amount,risk_capital,credit_percent,adj_rho,equity_exp,vega_percent,duration,Implied_spread,Credit_spread,implied_vol,vol,rho,  
+    field1,field2,field3,field4,field5,cost_percent,month_end_percent,coupan_payment,seniority,financial_health,is_hedge,moodys,is_secured_bank_loan,is_secured_Conv_bond,  
+    field6,field7,field8,field9,field10,ValueOf1Pt,version_date,version_source,trade_date,settlement_date,price,accrued_interest,accrued_dividend, PackageID, ConfigID,Comment1, Comment2, Comment3, Comment4, Comment5)  
+    SELECT report_date  = ReportDate,  
+     source   = Source,  
+     client_id  = ClientID,  
+     broker_id  = BrokerID,  
+     acc_id   = AccountID,  
+     acc_name  = AccountNo,  
+     curr_id   = CurrencyID,  
+     curr_name  = Currency,  
+     prod_id   = ProductID,  
+     prod_desc  = ProductDesc,  
+     interest_rate  = InterestRate,  
+     maturity_date  = MaturityDate,  
+     prod_symbol  = Symbol,  
+     prod_cusip  = Cusip,  
+     prod_isinno  = ISIN,  
+     prod_type  = ProductType,  
+     ticker   = Ticker,  
+     sedol   = Sedol,  
+     strategy  = Strategy,  
+     hedge_group  = HedgeGroup,  
+     sector   = Sector,  
+     l_s   = LongShort,  
+     country   = Country,  
+     company_name  = CompanyName,  
+     quantity  = Quantity,  
+     set_price  = SetPrice,  
+     amount   = Amount,  
+     converted_ratio  = ConvertedRatio,  
+     Leverage  = Leverage,  
+     fx_rate   = DayExchangeRate,  
+     credit_rating  = CreditRating,  
+     asset_class  = AssetClass,  
+     liquidity  = Liquidity,  
+     yc_exposure  = YCExposure,  
+     dtd_pnl   = DtdPnl,  
+     mtd_pnl   = MtdPnl,  
+     qtd_pnl   = QtdPnl,  
+     ytd_pnl   = YtdPnl,  
+     stat_pnl  = StatPnl,  
+     trading_pnl  = TradingPnl,  
+     aggregate_pnl  = AggregatePnl,  
+     commission  = Commission,  
+     fee   = Fee,  
+     pending_qty  = PendingQuantity,  
+     pending_amount  = PendingAmount,  
+     cost_amount  = CostAmount,  
+     risk_capital  = RiskCapital,  
+     credit_percent  = CreditPercent,  
+     adj_rho   = AdjustedRHO,  
+     equity_exp  = EquityExp,  
+     vega_percent  = VegaPercent,  
+     duration  = Duration,  
+     Implied_spread  = ImpliedSpread,  
+     Credit_spread  = CreditSpread,  
+     implied_vol  = ImpliedVolume,  
+     vol   = Volume,  
+     rho   = Rho,  
+     field1   = Field1,  
+     field2   = Field2,  
+     field3   = Field3,  
+     field4   = Field4,  
+     field5   = Field5,  
+     cost_percent  = CostPercent,  
+     month_end_percent = MonthEndPercent,  
+     coupan_payment  = CoupanPayment,  
+     seniority  = Seniority,  
+     financial_health = FinancialHealth,  
+     is_hedge  = IsHedge,  
+     moodys   = MoodysRating,  
+     is_secured_bank_loan = IsSecuredBankLoan,  
+     is_secured_Conv_bond = IsSecuredConvBond,  
+     field6   = Field6,  
+     field7   = Field7,  
+     field8   = Field8,  
+     field9   = Field9,  
+     field10   = Field10,  
+     ValueOf1Pt  = ValueOf1Pt,  
+     version_date  = @versionDate,    
+     version_source  = @versionSource,   
+     trade_date  = TradeDate,  
+     settlement_date  = SettlementDate,  
+     price   = Price,  
+     accrued_interest = AccruedInterest,  
+     accrued_dividend = AccruedDividend,  
+     PackageID  = @packageID,  
+     ConfigID  = ConfigID,  
+     Comment1  = Comment1,  
+     Comment2  = Comment2,  
+     Comment3  = Comment3,  
+     Comment4  = Comment4,  
+     Comment5  = Comment5  
+    FROM FileSetupClientOpenDetail WITH(NOLOCK)    
+    WHERE IsPending = 0  
+  
+  
+  
+  
+   END  
+     
+   IF @numPndCOD > 0  
+   BEGIN  
+    INSERT pending_client_open_detail(open_id, report_date,source,client_id,broker_id,acc_id,acc_name,curr_id,curr_name,prod_id,prod_desc,interest_rate,maturity_date,prod_symbol,  
+    prod_cusip,prod_isinno,prod_type,ticker,sedol,strategy,hedge_group,sector,l_s,ProdCountryDesc,company_name,quantity,set_price,amount,converted_ratio,Leverage,  
+    fx_rate,credit_rating,asset_class,liquidity,yc_exposure,dtd_pnl,mtd_pnl,qtd_pnl,ytd_pnl,stat_pnl,trading_pnl,aggregate_pnl,commission,fee,pending_qty,  
+    pending_amount,cost_amount,risk_capital,credit_percent,adj_rho,equity_exp,vega_percent,duration,Implied_spread,Credit_spread,implied_vol,vol,rho,  
+    field1,field2,field3,field4,field5,cost_percent,month_end_percent,coupan_payment,seniority,financial_health, is_hedge,moodys,is_secured_bank_loan,is_secured_Conv_bond,  
+    field6,field7,field8,field9,field10,ValueOf1Pt, trade_date,settlement_date,price,accrued_interest,accrued_dividend,  
+    RIC_symbol, RIC_exchange_code, exchange, multiplier, counter_curr_id, counter_curr, underlying_ric_symbol,SubSector, ExchangeID, ProdGroupID,  
+    PackageID, ConfigID,FIGISymbol,strike_price,Comment1, Comment2, Comment3, Comment4, Comment5)  
+    SELECT open_id   = @maxIDPndCOD - ROW_NUMBER() OVER (ORDER BY @maxIDPndCOD),  
+     report_date  = ReportDate,  
+     source   = Source,  
+     client_id  = ClientID,  
+     broker_id  = BrokerID,  
+     acc_id   = AccountID,  
+     acc_name  = AccountNo,  
+     curr_id   = CurrencyID,  
+     curr_name  = Currency,  
+     prod_id   = ProductID,  
+     prod_desc  = ProductDesc,  
+     interest_rate  = InterestRate,  
+     maturity_date  = MaturityDate,  
+     prod_symbol  = Symbol,  
+     prod_cusip  = Cusip,  
+     prod_isinno  = ISIN,  
+     prod_type  = ProductType,  
+     ticker   = Ticker,  
+     sedol   = Sedol,  
+     strategy  = Strategy,  
+     hedge_group  = HedgeGroup,  
+     sector   = Sector,  
+     l_s   = LongShort,  
+     ProdCountryDesc  = Country,  
+     company_name  = CompanyName,  
+     quantity  = Quantity,  
+     set_price  = SetPrice,  
+     amount   = Amount,  
+     converted_ratio  = ConvertedRatio,  
+     Leverage  = Leverage,  
+     fx_rate   = DayExchangeRate,  
+     credit_rating  = CreditRating,  
+     asset_class  = AssetClass,  
+     liquidity  = Liquidity,  
+     yc_exposure  = YCExposure,  
+     dtd_pnl   = DtdPnl,  
+     mtd_pnl   = MtdPnl,  
+     qtd_pnl   = QtdPnl,  
+     ytd_pnl   = YtdPnl,  
+     stat_pnl  = StatPnl,  
+     trading_pnl  = TradingPnl,  
+     aggregate_pnl  = AggregatePnl,  
+     commission  = Commission,  
+     fee   = Fee,  
+     pending_qty  = PendingQuantity,  
+     pending_amount  = PendingAmount,  
+     cost_amount  = CostAmount,  
+     risk_capital  = RiskCapital,  
+     credit_percent  = CreditPercent,  
+     adj_rho   = AdjustedRHO,  
+     equity_exp  = EquityExp,  
+     vega_percent  = VegaPercent,  
+     duration  = Duration,  
+     Implied_spread  = ImpliedSpread,  
+     Credit_spread  = CreditSpread,  
+     implied_vol  = ImpliedVolume,  
+     vol   = Volume,  
+     rho   = Rho,  
+     field1   = Field1,  
+     field2   = Field2,  
+     field3   = Field3,  
+     field4   = Field4,  
+     field5   = Field5,  
+     cost_percent  = CostPercent,  
+     month_end_percent = MonthEndPercent,  
+     coupan_payment  = CoupanPayment,  
+     seniority  = Seniority,  
+     financial_health = FinancialHealth,  
+     is_hedge  = IsHedge,  
+     moodys   = MoodysRating,  
+     is_secured_bank_loan = IsSecuredBankLoan,  
+     is_secured_Conv_bond = IsSecuredConvBond,  
+     field6   = Field6,  
+     field7   = Field7,  
+     field8   = Field8,  
+     field9   = Field9,  
+     field10   = Field10,  
+     ValueOf1Pt  = ValueOf1Pt,       
+     trade_date  = TradeDate,  
+     settlement_date  = SettlementDate,  
+     price   = Price,  
+     accrued_interest = AccruedInterest,  
+     accrued_dividend = AccruedDividend,  
+     RIC_symbol  = RICSymbol,  
+     RIC_exchange_code = RICExchangeCode,   
+     exchange  = Exchange,   
+     multiplier  = Multiplier,   
+     counter_curr_id  = CounterCurrID,  
+     counter_curr  = CounterCurrency,  
+     underlying_ric_symbol = UnderlyingRICSymbol,  
+     SubSector  = SubSector,   
+     ExchangeID  = ExchangeID,   
+     ProdGroupID  = ProductGroupID,  
+     PackageID  = PackageID,       
+     ConfigID  = ConfigID,  
+     FIGISymbol  = FIGISymbol,  
+     strike_price = strikeprice,  
+     Comment1  = Comment1,  
+     Comment2  = Comment2,  
+     Comment3  = Comment3,  
+     Comment4  = Comment4,  
+     Comment5  = Comment5  
+    FROM FileSetupClientOpenDetail WITH(NOLOCK)    
+    WHERE IsPending = 1  
+      
+   END  
+   -----------------------------------------------------------------  
+   --Delete rows from pending  
+   -----------------------------------------------------------------  
+  
+   IF @isCalledFrom = 2  
+   BEGIN  
+    DELETE PT  
+    OUTPUT deleted.source, deleted.Report_Date, deleted.Client_ID, deleted.Broker_ID, deleted.packageID  
+    INTO @PendingDate(Source, ReportDate, ClientID, BrokerID,PackageID)  
+    FROM pending_trade PT WITH(NOLOCK)    
+    INNER JOIN  
+     PendingRepostTable P WITH(NOLOCK)  
+    ON P.TranID = PT.Trade_ID  
+    AND PT.PackageID = @packageID  
+      
+   END  
+   ELSE IF @isCalledFrom = 3  
+   BEGIN  
+    DELETE PT  
+    OUTPUT deleted.source, deleted.Report_Date, deleted.Client_ID, deleted.Broker_ID, deleted.packageID  
+    INTO @PendingDate(Source, ReportDate, ClientID, BrokerID,PackageID)  
+  
+    FROM pending_open PT WITH(NOLOCK)    
+    INNER JOIN  
+     PendingRepostTable P WITH(NOLOCK)  
+    ON P.TranID = PT.open_id  
+    AND PT.PackageID = @packageID  
+  
+   END  
+   ELSE IF @isCalledFrom = 4  
+   BEGIN  
+    DELETE PT  
+    OUTPUT deleted.source, deleted.Report_Date, deleted.Client_ID, deleted.Broker_ID, deleted.packageID  
+    INTO @PendingDate(Source, ReportDate, ClientID, BrokerID, PackageID)  
+    FROM pending_client_open_detail PT WITH(NOLOCK)    
+    INNER JOIN  
+     PendingRepostTable P WITH(NOLOCK)  
+    ON P.TranID = PT.open_id  
+    AND PT.PackageID = @packageID  
+   END  
+   ELSE IF @isCalledFrom = 5  
+   BEGIN  
+    DELETE PC  
+    OUTPUT deleted.source, deleted.ReportDate, deleted.ClientID, deleted.BrokerID, deleted.PackageID  
+    INTO @PendingDate(Source, ReportDate, ClientID, BrokerID, PackageID)  
+    FROM PendingCash PC WITH(NOLOCK)    
+    INNER JOIN  
+     PendingRepostTable P WITH(NOLOCK)  
+    ON P.TranID = PC.CashID  
+    AND PC.PackageID = @packageID  
+   END  
+   ELSE IF @isCalledFrom = 6  
+   BEGIN  
+    DELETE PB  
+    OUTPUT deleted.source, deleted.ReportDate, deleted.ClientID, deleted.BrokerID, deleted.PackageID  
+    INTO @PendingDate(Source, ReportDate, ClientID, BrokerID, PackageID)  
+    FROM PendingBalance PB WITH(NOLOCK)    
+    INNER JOIN  
+     PendingRepostTable P WITH(NOLOCK)  
+    ON P.TranID = PB.BalanceID  
+    AND PB.PackageID = @packageID  
+   END  
+  
+   -----------------------------------------------------------------  
+   --To show pending count on Multi Process  
+   -----------------------------------------------------------------  
+   IF (@isCalledFrom = 1)   
+   BEGIN  
+      
+    --INSERT INTO @PendingDate(Source, ReportDate, ClientID, BrokerID)  
+    INSERT INTO @PendingDate(Source, ReportDate, ClientID, BrokerID, PackageID)  
+    SELECT Source, ReportDate, ClientID, BrokerID, @PackageID FROM FileSetupTrades WITH(NOLOCK)    
+    UNION  
+    SELECT Source, ReportDate, ClientID, BrokerID, @PackageID FROM FileSetupPosition WITH(NOLOCK)    
+    UNION  
+    SELECT Source, ReportDate, ClientID, BrokerID, @PackageID FROM FileSetupCash WITH(NOLOCK)    
+    UNION  
+    SELECT Source, ReportDate, ClientID, BrokerID, @PackageID FROM FileSetupClientOpenDetail WITH(NOLOCK)    
+    UNION   
+    SELECT Source, ReportDate, ClientID, BrokerID, @PackageID FROM FileSetupBalance WITH(NOLOCK)        
+      
+   END  
+     
+  
+     
+     
+   IF EXISTS(SELECT TOP 1 1 FROM @PendingDate)  
+   BEGIN  
+    SET @pendingLogXML = (SELECT DISTINCT  
+         ReportDate,ClientID,BrokerID,Source,PackageID  
+        FROM @PendingDate  
+        WHERE PackageID = @packageID  
+        FOR XML PATH('dt'), TYPE, ROOT('ds'))  
+  
+    EXEC @retStatus = GeneratePendingLogData @pendingLogXML  
+    IF (@retStatus != 0) RAISERROR('Error in Pending Log generation.',16,1)  
+   END  
+        
+   
+   -----------------------------------------------------------------  
+   --Set Exchange Rate of Day (No Need to Read Exchnage Rate   
+   --From External Client Position  
+   -----------------------------------------------------------------     
+   --Exchange rate Reading is Only Applicable when Master Exchange Rates are Not applicable and Transformation is applicable  
+   IF NOT EXISTS(SELECT TOP 1 1 FROM Client_Reference WITH(NOLOCK)  
+       WHERE Client_ID = @clientID  
+       AND Type  = 'EXCHANGERATE SOURCE'  
+       AND Value  = 'MASTER'  
+       AND @reportDate BETWEEN Valid_From AND Valid_To)  
+   BEGIN  
+      
+    INSERT @exchangeRateConfigID(ConfigID)  
+    SELECT A.ID FROM dbo.fnSplitNumbers(@exchangeRateConfigIds,',')A  
+  
+    IF EXISTS (SELECT TOP 1 1 FROM @exchangeRateConfigID)  
+    BEGIN  
+     INSERT #exchangeRates(ExchangeRateID,ReportDate,BrokerID,CurrencyID,ClientExchangeRate,Source,Action)  
+     SELECT T.exch_rate_id,B.ReportDate,B.BrokerID,B.CurrencyID,B.DayExchangeRate,'N','I'  
+     FROM Exchange_Rates T WITH(NOLOCK)  
+     LEFT JOIN  
+     (SELECT ReportDate, BrokerID, CurrencyID,DayExchangeRate = MAX(DayExchangeRate)  
+     FROM (  
+      SELECT DISTINCT ClientID = CM.TargetClientID,ReportDate, BrokerID, CurrencyID, DayExchangeRate   
+      FROM FileSetupTrades A WITH(NOLOCK)  
+      INNER JOIN  
+       @exchangeRateConfigID B  
+      ON A.ConfigID = B.ConfigID  
+      CROSS APPLY  
+       ClientBrokerMappingForSecurityAttributes CM WITH(NOLOCK)  
+      WHERE DayExchangeRate IS NOT NULL AND CurrencyID IS NOT NULL AND ClientID = @clientID  
+  
+      UNION ALL  
+  
+      SELECT  DISTINCT ClientID= CM.TargetClientID,ReportDate, BrokerID, CurrencyID, DayExchangeRate   
+      FROM FileSetupPosition A  
+      INNER JOIN  
+       @exchangeRateConfigID B  
+      ON A.ConfigID = B.ConfigID  
+      CROSS APPLY  
+       ClientBrokerMappingForSecurityAttributes CM WITH(NOLOCK)  
+      WHERE DayExchangeRate IS NOT NULL AND CurrencyID IS NOT NULL AND ClientID = @clientID  
+  
+      UNION ALL  
+  
+      SELECT  DISTINCT ClientID =CM.TargetClientID,ReportDate, BrokerID, CurrencyID, DayExchangeRate   
+      FROM FileSetupBalance A  
+      INNER JOIN  
+       @exchangeRateConfigID B  
+      ON A.ConfigID = B.ConfigID  
+      CROSS APPLY  
+       ClientBrokerMappingForSecurityAttributes CM WITH(NOLOCK)  
+      WHERE DayExchangeRate IS NOT NULL AND CurrencyID IS NOT NULL AND ClientID = @clientID       
+      ) ER  
+     GROUP BY ReportDate, BrokerID, CurrencyID,ClientID)B  
+     ON  B.ReportDate = T.Report_Date  
+     --AND B.ClientID = T.ClientId  
+     AND B.CurrencyID = T.Curr_ID  
+     AND T.Source = 'N'  
+     AND ISNULL(B.DayExchangeRate,0) > 0   
+  
+  
+     IF EXISTS (SELECT TOP 1 1 FROM shadow_client_account_mapping WHERE client_id = @clientID)  
+     BEGIN  
+        
+      MERGE Exchange_Rates T  
+      USING (  
+       SELECT ClientID,ReportDate, BrokerID, CurrencyID, DayExchangeRate = MAX(DayExchangeRate)  
+       FROM (  
+        SELECT DISTINCT ClientID = CM.TargetClientID,ReportDate, BrokerID, CurrencyID, DayExchangeRate   
+        FROM FileSetupTrades A   
+        INNER JOIN  
+         @exchangeRateConfigID B  
+        ON A.ConfigID = B.ConfigID  
+        CROSS APPLY  
+         ClientBrokerMappingForSecurityAttributes CM WITH(NOLOCK)  
+        WHERE DayExchangeRate IS NOT NULL AND CurrencyID IS NOT NULL AND ClientID = @clientID  
+  
+        UNION ALL  
+  
+        SELECT  DISTINCT ClientID= CM.TargetClientID,ReportDate, BrokerID, CurrencyID, DayExchangeRate   
+        FROM FileSetupPosition A  
+        INNER JOIN  
+         @exchangeRateConfigID B  
+        ON A.ConfigID = B.ConfigID  
+        CROSS APPLY  
+         ClientBrokerMappingForSecurityAttributes CM WITH(NOLOCK)  
+        WHERE DayExchangeRate IS NOT NULL AND CurrencyID IS NOT NULL AND ClientID = @clientID  
+  
+        UNION ALL  
+  
+        SELECT  DISTINCT ClientID =CM.TargetClientID,ReportDate, BrokerID, CurrencyID, DayExchangeRate   
+        FROM FileSetupBalance A  
+        INNER JOIN  
+         @exchangeRateConfigID B  
+        ON A.ConfigID = B.ConfigID  
+        CROSS APPLY  
+         ClientBrokerMappingForSecurityAttributes CM WITH(NOLOCK)  
+        WHERE DayExchangeRate IS NOT NULL AND CurrencyID IS NOT NULL AND ClientID = @clientID       
+        ) ER  
+       GROUP BY ReportDate, BrokerID, CurrencyID,ClientID  
+       )S  
+      ON S.ReportDate = T.Report_Date  
+      AND S.ClientID = T.ClientId  
+      AND S.CurrencyID = T.Curr_ID  
+      AND T.Source = 'N'  
+      AND ISNULL(S.DayExchangeRate,0) > 0   
+      WHEN MATCHED AND ISNULL(S.DayExchangeRate,0) != ISNULL(T.Exch_Rate,0)  THEN  
+       UPDATE   
+       SET Exch_Rate   = S.DayExchangeRate,   
+        Version_Date   = @versionDate,  
+        Version_Source   = @versionSource  
+      WHEN NOT MATCHED BY TARGET AND ISNULL(S.DayExchangeRate,0) >0  THEN  
+      INSERT (report_date, broker_id, ClientId, curr_id, exch_rate, source, version_date, version_source)  
+      VALUES (ReportDate, BrokerID, ClientID, CurrencyID, DayExchangeRate, 'N', @versionDate, @versionSource );  
+  
+     END  
+     ELSE  
+     BEGIN  
+      MERGE Exchange_Rates T  
+      USING (  
+       SELECT ClientID,ReportDate, BrokerID, CurrencyID, DayExchangeRate = MAX(DayExchangeRate)  
+       FROM (  
+        SELECT ClientID,ReportDate, BrokerID, CurrencyID, DayExchangeRate   
+        FROM FileSetupTrades A  
+        INNER JOIN  
+         @exchangeRateConfigID B  
+        ON A.ConfigID = B.ConfigID  
+        WHERE DayExchangeRate IS NOT NULL AND CurrencyID IS NOT NULL AND ClientID = @clientID  
+  
+        UNION ALL  
+  
+        SELECT ClientID,ReportDate, BrokerID, CurrencyID, DayExchangeRate   
+        FROM FileSetupPosition A  
+        INNER JOIN  
+         @exchangeRateConfigID B  
+        ON A.ConfigID = B.ConfigID  
+        WHERE DayExchangeRate IS NOT NULL AND CurrencyID IS NOT NULL AND ClientID = @clientID  
+  
+        UNION ALL  
+  
+        SELECT ClientID,ReportDate, BrokerID, CurrencyID, DayExchangeRate   
+        FROM FileSetupBalance A  
+        INNER JOIN  
+         @exchangeRateConfigID B  
+        ON A.ConfigID = B.ConfigID  
+        WHERE DayExchangeRate IS NOT NULL AND CurrencyID IS NOT NULL AND ClientID = @clientID       
+        ) ER  
+       GROUP BY ReportDate, BrokerID, CurrencyID,ClientID  
+       )S  
+      ON S.ReportDate = T.Report_Date  
+      AND S.ClientID = T.ClientId  
+      AND S.CurrencyID = T.Curr_ID  
+      AND T.Source = 'N'  
+      AND ISNULL(S.DayExchangeRate,0) > 0   
+      WHEN MATCHED AND ISNULL(S.DayExchangeRate,0) != ISNULL(T.Exch_Rate,0)  THEN  
+       UPDATE   
+       SET Exch_Rate   = S.DayExchangeRate,   
+        Version_Date   = @versionDate,  
+        Version_Source   = @versionSource  
+      WHEN NOT MATCHED BY TARGET AND ISNULL(S.DayExchangeRate,0) >0  THEN  
+      INSERT (report_date, broker_id, ClientId, curr_id, exch_rate, source, version_date, version_source)  
+      VALUES (ReportDate, BrokerID, ClientID, CurrencyID, DayExchangeRate, 'N', @versionDate, @versionSource );  
+     END   
+       
+     EXEC ExchangeRatesTrig @clientMasterXML=@clientMasterXML,@cutOffDatesXML=@cutOffDatesXML,@insExchangeRateObject=@insUiExchangeRatesObject,@delExchangeRateObject=@delUiExchangeRatesObject  
+    END     
+   END  
+  
+  
+   ---------------------------------------------  
+   -- Inserting broker exchange rate in client.  
+   ---------------------------------------------  
+   MERGE AccountLevelExchRates T  
+   USING (  
+     SELECT ReportDate,ClientID,BrokerID,AccountID,CurrencyID,BrokerExchangeRate = MAX(BrokerExchangeRate)  
+     FROM FileSetupPosition WITH(NOLOCK)  
+     WHERE ISNULL(BrokerExchangeRate,0) > 0  
+     AND CurrencyID IS NOT NULL  
+     AND AccountID IS NOT NULL  
+     AND ClientID = @clientID  
+     GROUP BY ReportDate,ClientID,BrokerID,AccountID,CurrencyID  
+    )S  
+   ON S.ReportDate = T.ReportDate  
+   AND S.ClientID = T.ClientID  
+   AND S.BrokerID = T.BrokerID  
+   AND S.AccountID = T.AccountID  
+   AND S.CurrencyID = T.CurrencyID  
+   AND T.Source = 'B'  
+   WHEN MATCHED AND S.BrokerExchangeRate != T.ExchRate  THEN  
+   UPDATE   
+   SET ExchRate = S.BrokerExchangeRate,   
+    VersionDate = @versionDate,  
+    VersionSource = @versionSource  
+   WHEN NOT MATCHED BY TARGET  THEN  
+   INSERT (ReportDate,ClientID,BrokerID,AccountID,CurrencyID,Source,ExchRate,VersionDate,VersionSource)  
+   VALUES (ReportDate,ClientID,BrokerID,AccountID,CurrencyID,'B',BrokerExchangeRate,@versionDate,@versionSource);  
+  
+  
+   IF (EXISTS (SELECT TOP 1 1 FROM FileSetupTradesDetailData) OR EXISTS (SELECT TOP 1 1 FROM FileSetupPosition WHERE IsPending = 0))  
+   BEGIN  
+       IF (@source = 'B')  
+       BEGIN  
+     SET @accIDs = ''  
+     SET @accIDs = (SELECT CONVERT(VARCHAR(10), AccountID, 101) + ','   
+        FROM (  
+         SELECT DISTINCT AccountID   
+         FROM FileSetupTradesDetailData WITH(NOLOCK)  
+         UNION  
+         SELECT DISTINCT AccountID   
+         FROM FileSetupPosition WITH(NOLOCK)  
+         WHERE IsPending = 0  
+         ) PS     
+        ORDER BY AccountID FOR XML PATH(''))  
+     SET @accIDs = LEFT(@accIDs,LEN(@accIDs)-1)  
+  
+     SELECT TOP 1 @reportDate = ReportDate,  
+       @clientID = ClientID  
+     FROM (SELECT TOP 1 ReportDate, ClientID  
+      FROM FileSetupTradesDetailData WITH(NOLOCK)  
+      UNION  
+      SELECT TOP 1 ReportDate, ClientID  
+      FROM FileSetupPosition WITH(NOLOCK)  
+      WHERE IsPending = 0) A  
+  
+     IF @isCalledFrom IN (2,3)  
+     BEGIN  
+  
+     SET @prodIDsXML = ( SELECT ProductID  
+          FROM  
+          (SELECT ProductID  
+          FROM FileSetupTradesDetailData WITH(NOLOCK)  
+          UNION  
+          SELECT ProductID  
+          FROM FileSetupPosition  WITH(NOLOCK)  
+          WHERE IsPending = 0) A  
+          FOR XML PATH('dt'), TYPE, ROOT('ds')  
+         )  
+  
+     END  
+  
+     EXEC @retStatus = UiGenerateBrokerTrades @reportDate = @reportDate, @clientID = @clientID, @fundIDs = @accIDs, @prodIDsXml = @prodIDsXML,@mainProdMasterDataXML=@mainProdMasterDataXML,  
+              @ProdMasterDataXML=@ProdMasterDataXML,@dividendInformationXML=@dividendInformationXML,@securityCommitmentXML=@securityCommitmentXML,  
+              @stockExchangesXML=@stockExchangesXML,@counterPartiesXML=@counterPartiesXML,@commissionSubtypesXML=@commissionSubtypesXML,  
+              @commissionTypesSubtypesXML=@commissionTypesSubtypesXML,@cutOffDatesXML=@cutOffDatesXML,@systemInformationXML=@systemInformationXML,  
+              @clientMasterXML=@clientMasterXML,@corporateActionOptionReferenceXML=@corporateActionOptionReferenceXML,@productTypesXML=@productTypesXML  
+     IF (@retStatus != 0) RAISERROR('Error in broker trades generation.',16,1)  
+    END  
+   END  
+  
+    
+     
+  END  
+   
+    
+  COMMIT TRAN  
+  RETURN 0  
+  
+ END TRY  
+ BEGIN CATCH  
+    
+  ROLLBACK TRAN;    
+  --Incase of error return recordset to show user and update log  
+  IF @isCalledFrom IN (0,1) AND @handledError = 1  
+  BEGIN  
+   SELECT ConfigID = @configID, StepNo = @stepNo, ErrorDescription = ERROR_MESSAGE()  
+  
+   EXEC RethrowError  
+   RETURN -10  
+  END  
+  SET CONTEXT_INFO @oldContextInfo  
+  EXEC RethrowError  
+  
+ END CATCH  
+   
+END  
