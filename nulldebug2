@@ -1,2 +1,1 @@
-INSERT INTO #tempFileSetupTradesDetailData (TradeID, Source, Status, ClientID, BrokerID, ReportDate, TradeDate, AccountID, CurrencyID, Currency, ProductID)
-VALUES (-999, 'B', 'E', @clientID, @brokerID, @reportDate, @reportDate, 12345, NULL, NULL, 98765);
+in which case I will get above error for this code - pendingRepostTable = (from r in doc.Root.Elements("dtPendingRePost") select new PendingRepostTable { TranID = (int)r.Element("TranID"), ClientID = (int)r.Element("ClientID"), BrokerID = (int)r.Element("BrokerID"), AccountID = r.Element("AccountID") != null ? (int)r.Element("AccountID") : 0, CurrID = r.Element("CurrID") != null ? (int)r.Element("CurrID") : 0, ProductID = (int?)r.Element("ProductID") }).ToList(); }
